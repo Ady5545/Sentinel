@@ -2,6 +2,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('sentinelDesktop', {
   getRuntimeInfo: () => ipcRenderer.invoke('desktop:runtime'),
+  exportEvidence: request => ipcRenderer.invoke('data:export-file', request),
+  getUserDataPath: () => ipcRenderer.invoke('data:user-data-path'),
   listSerialPorts: () => ipcRenderer.invoke('serial:list-ports'),
   connectBoard: request => ipcRenderer.invoke('serial:connect', request),
   disconnectBoard: device => ipcRenderer.invoke('serial:disconnect', device),
