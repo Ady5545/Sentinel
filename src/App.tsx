@@ -102,7 +102,7 @@ export default function App() {
       transactions: state.transactions, events: state.events
     };
     const csvCell = (value: unknown) => '"' + String(value ?? '').replace(/"/g, '""') + '"';
-    const csv = ['timestamp,id,severity,source,title,detail', ...state.events.map(item => [item.at,item.id,item.severity,item.source,item.title,item.detail].map(csvCell).join(','))].join('\\r\\n');
+    const csv = ['timestamp,id,severity,source,title,detail', ...state.events.map(item => [item.at,item.id,item.severity,item.source,item.title,item.detail].map(csvCell).join(','))].join('\r\n');
     try {
       const result = await api.exportEvidence({ format, fileName: format === 'json' ? 'sentinel-evidence.json' : 'sentinel-events.csv', content: format === 'json' ? JSON.stringify(payload, null, 2) : csv });
       setExportStatus(result.ok ? 'Evidence exported to ' + result.filePath : result.canceled ? 'Export cancelled.' : result.error || 'Export failed.');
