@@ -64,7 +64,8 @@
             "arm64"
           ]
         }
-      ]
+      ],
+      "icon": "build/icons/icon.icns"
     },
     "win": {
       "target": [
@@ -80,7 +81,8 @@
             "x64"
           ]
         }
-      ]
+      ],
+      "icon": "build/icons/icon.ico"
     },
     "nsis": {
       "oneClick": false,
