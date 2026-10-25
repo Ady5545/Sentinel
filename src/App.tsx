@@ -30,6 +30,9 @@ const clock = () => new Date().toLocaleTimeString('en-IN', { hour: '2-digit', mi
 export default function App() {
   const [state, dispatch] = useReducer(atmReducer, undefined, () => initialAtmState('protected'));
   const [view, setView] = useState<View>('terminal');
+  const [launcherOpen, setLauncherOpen] = useState(false);
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [commandQuery, setCommandQuery] = useState('');
   const [ports, setPorts] = useState<Port[]>([]);
   const [chosenPort, setChosenPort] = useState<Record<DeviceKey, string>>({ uno: '', sentinel: '' });
   const [boards, setBoards] = useState<Record<DeviceKey, BoardState>>(initialBoards);
@@ -69,6 +72,24 @@ export default function App() {
     return () => window.removeEventListener('sentinel:navigate', handler);
   }, []);
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); setCommandOpen(value => !value); setLauncherOpen(false); }
+      if (event.key === 'Escape') { setCommandOpen(false); setLauncherOpen(false); }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  const navigateTo = (next: View) => { setView(next); setLauncherOpen(false); setCommandOpen(false); setCommandQuery(''); };
+  const appItems: { id: View; label: string; detail: string; icon: typeof Monitor }[] = [
+    { id: 'terminal', label: 'ATM Terminal', detail: 'Customer session and transactions', icon: Landmark },
+    { id: 'machine', label: 'Machine Studio', detail: 'Cabinet and component states', icon: Monitor },
+    { id: 'sentinel', label: 'Security Center', detail: 'Evidence, policy and authority', icon: ShieldCheck },
+    { id: 'experiments', label: 'Experiment Lab', detail: 'Run controlled scenarios', icon: Fingerprint },
+    { id: 'journal', label: 'Incident Journal', detail: 'Timeline and event evidence', icon: Activity },
+    { id: 'hardware', label: 'Hardware Bridge', detail: 'Arduino and ESP32 serial link', icon: Plug }
+  ];
   const eventCount = state.events.length;
   const alerts = state.events.filter(event => event.severity === 'warning' || event.severity === 'critical').length;
   const refreshPorts = async () => {
@@ -100,7 +121,9 @@ export default function App() {
     setBoards(previous => ({ ...previous, [device]: { ...previous[device], connected: false, path: '' } }));
   };
 
-  return <div className="desktop-app">
+  return <div className="sentinel-os">
+    <header className="os-menubar"><div className="os-brand"><span className="os-brand-mark"><ShieldCheck size={13} /></span><strong>SENTINEL</strong><span className="os-separator">/</span><span>RESEARCH ENVIRONMENT</span></div><div className="os-menubar-center"><span className="os-live-dot" /> LOCAL WORKSTATION <span className="os-separator">·</span> OFFLINE-FIRST</div><div className="os-menubar-right"><span className="os-runtime">{runtime ? runtime.platform.toUpperCase() + ' · ' + runtime.version : 'DEVELOPMENT SESSION'}</span><span className="os-menubar-clock">{clock()}</span></div></header>
+    <div className="desktop-app">
     <aside className="app-rail">
       <div className="identity"><div className="identity-mark"><ShieldCheck size={23} /></div><div><strong>SENTINEL</strong><small>ATM EMULATOR</small></div></div>
       <div className="rail-divider" />
@@ -139,6 +162,10 @@ export default function App() {
         <footer className="status-footer"><span><i /> DOMAIN CORE ACTIVE</span><span>{eventCount.toString().padStart(3,'0')} EVENTS · {alerts.toString().padStart(2,'0')} ALERTS</span><span>FICTIONAL ACCOUNT · VIRTUAL CASH · RESEARCH PROTOTYPE</span></footer>
       </div>
     </main>
+    </div>
+    {launcherOpen && <div className="os-launcher-backdrop" onClick={() => setLauncherOpen(false)}><section className="os-launcher" onClick={event => event.stopPropagation()}><div className="os-launcher-heading"><div className="os-launcher-emblem"><ShieldCheck size={22} /></div><div><strong>SENTINEL WORKSPACE</strong><small>LOCAL SECURITY RESEARCH SYSTEM</small></div></div><label className="os-searchbox"><Activity size={16} /><span>Choose a workspace module</span><kbd>ESC</kbd></label><div className="os-app-grid">{appItems.map(item => { const Icon=item.icon; return <button key={item.id} className="os-app-tile" onClick={() => navigateTo(item.id)}><span className="os-app-icon"><Icon size={20} /></span><strong>{item.label}</strong><small>{item.detail}</small></button>; })}</div><div className="os-launcher-footer"><span><i /> ALL SYSTEMS LOCAL</span><span>NO CLOUD ACCOUNT REQUIRED</span></div></section></div>}
+    {commandOpen && <div className="os-command-backdrop" onClick={() => setCommandOpen(false)}><section className="os-command" onClick={event => event.stopPropagation()}><div className="os-command-input"><Activity size={18} /><input autoFocus value={commandQuery} onChange={event => setCommandQuery(event.target.value)} placeholder="Search modules and commands…" /><kbd>ESC</kbd></div><div className="os-command-results">{appItems.filter(item => (item.label + ' ' + item.detail).toLowerCase().includes(commandQuery.toLowerCase())).map(item => { const Icon=item.icon; return <button key={item.id} onClick={() => navigateTo(item.id)}><Icon size={17} /><span><strong>{item.label}</strong><small>{item.detail}</small></span><kbd>OPEN</kbd></button>; })}{appItems.every(item => !(item.label + ' ' + item.detail).toLowerCase().includes(commandQuery.toLowerCase())) && <p>No matching workspace module.</p>}</div><div className="os-command-footer">COMMAND PALETTE <span>Navigate · Open modules · Escape to close</span></div></section></div>}
+    <footer className="os-dock"><button className={'os-dock-launcher ' + (launcherOpen ? 'selected' : '')} title="Workspace launcher" onClick={() => { setLauncherOpen(value => !value); setCommandOpen(false); }}><ShieldCheck size={21} /></button><div className="os-dock-divider" />{appItems.map(item => { const Icon=item.icon; return <button key={item.id} title={item.label} aria-label={item.label} className={'os-dock-app ' + (view === item.id ? 'active' : '')} onClick={() => navigateTo(item.id)}><Icon size={18} /><i /></button>; })}<div className="os-dock-spacer" /><button className="os-dock-search" onClick={() => { setCommandOpen(true); setLauncherOpen(false); }}><Activity size={15} /><span>Quick search</span><kbd>⌘ K</kbd></button><div className="os-dock-status"><span className="os-live-dot" /> LOCAL CORE</div></footer>
   </div>;
 }
 
