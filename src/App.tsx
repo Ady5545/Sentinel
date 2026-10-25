@@ -49,7 +49,7 @@ export default function App() {
         ...previous,
         [event.device]: {
           ...previous[event.device],
-          connected: event.kind !== 'closed',
+          connected: event.kind === 'opened' || event.kind === 'line',
           path: event.path || previous[event.device].path,
           lastLine: event.kind === 'line' ? event.line : previous[event.device].lastLine,
           error: event.kind === 'error' ? event.message : undefined
