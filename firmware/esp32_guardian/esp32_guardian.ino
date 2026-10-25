@@ -117,7 +117,7 @@ void revoke(const char *reason) {
   if (!wasLatched) {
     Serial.print(F("[REVOKE] "));
     Serial.println(reason);
-    sendFrame("REVOKE", reason);
+    sendFrame("REVOKE", "POLICY_REVOKE");
   }
 }
 
