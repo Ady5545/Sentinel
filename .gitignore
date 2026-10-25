@@ -1,5 +1,7 @@
 node_modules/
 dist/
+release/
+out/
 .vite/
 .DS_Store
 .env

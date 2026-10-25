@@ -1,0 +1,50 @@
+name: Package SENTINEL for macOS and Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    tags:
+      - 'desktop-v*'
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: mac
+            artifact: macOS-Apple-Silicon
+          - os: windows-latest
+            target: win
+            artifact: Windows-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Run tests
+        run: npm test
+      - name: Build renderer
+        run: npm run build:renderer
+      - name: Package macOS Apple Silicon
+        if: matrix.target == 'mac'
+        run: npx electron-builder --mac dmg zip --arm64
+      - name: Package Windows x64
+        if: matrix.target == 'win'
+        run: npx electron-builder --win nsis zip --x64
+      - name: Upload desktop artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: SENTINEL-${{ matrix.artifact }}-${{ github.sha }}
+          path: release/*
+          if-no-files-found: error
+          retention-days: 14
