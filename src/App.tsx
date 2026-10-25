@@ -33,6 +33,7 @@ export default function App() {
   const [launcherOpen, setLauncherOpen] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState('');
+  const [exportStatus, setExportStatus] = useState('');
   const [ports, setPorts] = useState<Port[]>([]);
   const [chosenPort, setChosenPort] = useState<Record<DeviceKey, string>>({ uno: '', sentinel: '' });
   const [boards, setBoards] = useState<Record<DeviceKey, BoardState>>(initialBoards);
@@ -90,6 +91,23 @@ export default function App() {
     { id: 'journal', label: 'Incident Journal', detail: 'Timeline and event evidence', icon: Activity },
     { id: 'hardware', label: 'Hardware Bridge', detail: 'Arduino and ESP32 serial link', icon: Plug }
   ];
+  const exportEvidence = async (format: 'json' | 'csv') => {
+    const api = window.sentinelDesktop;
+    if (!api) { setExportStatus('Native evidence export is available in the desktop application, not browser preview.'); return; }
+    const payload = {
+      product: 'SENTINEL Research Environment', schemaVersion: 1, exportedAt: new Date().toISOString(),
+      mode: state.mode, evidenceProvenance: 'SIMULATED SOFTWARE FIXTURE; NOT HARDWARE ATTESTATION',
+      researchLimit: 'Virtual ATM only. No real cash, bank connection, or physical dispenser.',
+      summary: { accountId: state.accountId, accountBalance: state.accountBalance, cassetteCash: state.cassetteCash, dispensedTotal: state.dispensedTotal, controllerState: state.controllerState, sentinelStatus: state.sentinelStatus, lastDecision: state.lastDecision, findings: state.findings },
+      transactions: state.transactions, events: state.events
+    };
+    const csvCell = (value: unknown) => '"' + String(value ?? '').replace(/"/g, '""') + '"';
+    const csv = ['timestamp,id,severity,source,title,detail', ...state.events.map(item => [item.at,item.id,item.severity,item.source,item.title,item.detail].map(csvCell).join(','))].join('\\r\\n');
+    try {
+      const result = await api.exportEvidence({ format, fileName: format === 'json' ? 'sentinel-evidence.json' : 'sentinel-events.csv', content: format === 'json' ? JSON.stringify(payload, null, 2) : csv });
+      setExportStatus(result.ok ? 'Evidence exported to ' + result.filePath : result.canceled ? 'Export cancelled.' : result.error || 'Export failed.');
+    } catch (error) { setExportStatus(error instanceof Error ? error.message : String(error)); }
+  };
   const eventCount = state.events.length;
   const alerts = state.events.filter(event => event.severity === 'warning' || event.severity === 'critical').length;
   const refreshPorts = async () => {
@@ -157,7 +175,7 @@ export default function App() {
         {view === 'machine' && <MachineView state={state} boards={boards} />}
         {view === 'sentinel' && <SentinelView state={state} boards={boards} />}
         {view === 'experiments' && <ExperimentView state={state} dispatch={dispatch} />}
-        {view === 'journal' && <JournalView events={[...state.events].reverse()} alerts={alerts} />}
+        {view === 'journal' && <JournalView events={[...state.events].reverse()} alerts={alerts} onExport={exportEvidence} />}
         {view === 'hardware' && <HardwareView ports={ports} chosenPort={chosenPort} setChosenPort={setChosenPort} boards={boards} message={portMessage} serialEvents={serialEvents} refresh={refreshPorts} connect={connectBoard} disconnect={disconnectBoard} />}
         <footer className="status-footer"><span><i /> DOMAIN CORE ACTIVE</span><span>{eventCount.toString().padStart(3,'0')} EVENTS · {alerts.toString().padStart(2,'0')} ALERTS</span><span>FICTIONAL ACCOUNT · VIRTUAL CASH · RESEARCH PROTOTYPE</span></footer>
       </div>
@@ -165,6 +183,7 @@ export default function App() {
     </div>
     {launcherOpen && <div className="os-launcher-backdrop" onClick={() => setLauncherOpen(false)}><section className="os-launcher" onClick={event => event.stopPropagation()}><div className="os-launcher-heading"><div className="os-launcher-emblem"><ShieldCheck size={22} /></div><div><strong>SENTINEL WORKSPACE</strong><small>LOCAL SECURITY RESEARCH SYSTEM</small></div></div><label className="os-searchbox"><Activity size={16} /><span>Choose a workspace module</span><kbd>ESC</kbd></label><div className="os-app-grid">{appItems.map(item => { const Icon=item.icon; return <button key={item.id} className="os-app-tile" onClick={() => navigateTo(item.id)}><span className="os-app-icon"><Icon size={20} /></span><strong>{item.label}</strong><small>{item.detail}</small></button>; })}</div><div className="os-launcher-footer"><span><i /> ALL SYSTEMS LOCAL</span><span>NO CLOUD ACCOUNT REQUIRED</span></div></section></div>}
     {commandOpen && <div className="os-command-backdrop" onClick={() => setCommandOpen(false)}><section className="os-command" onClick={event => event.stopPropagation()}><div className="os-command-input"><Activity size={18} /><input autoFocus value={commandQuery} onChange={event => setCommandQuery(event.target.value)} placeholder="Search modules and commands…" /><kbd>ESC</kbd></div><div className="os-command-results">{appItems.filter(item => (item.label + ' ' + item.detail).toLowerCase().includes(commandQuery.toLowerCase())).map(item => { const Icon=item.icon; return <button key={item.id} onClick={() => navigateTo(item.id)}><Icon size={17} /><span><strong>{item.label}</strong><small>{item.detail}</small></span><kbd>OPEN</kbd></button>; })}{appItems.every(item => !(item.label + ' ' + item.detail).toLowerCase().includes(commandQuery.toLowerCase())) && <p>No matching workspace module.</p>}</div><div className="os-command-footer">COMMAND PALETTE <span>Navigate · Open modules · Escape to close</span></div></section></div>}
+    {exportStatus && <div className="os-toast" role="status"><span><CheckCircle2 size={15} /> {exportStatus}</span><button onClick={() => setExportStatus('')} aria-label="Dismiss export message">×</button></div>}
     <footer className="os-dock"><button className={'os-dock-launcher ' + (launcherOpen ? 'selected' : '')} title="Workspace launcher" onClick={() => { setLauncherOpen(value => !value); setCommandOpen(false); }}><ShieldCheck size={21} /></button><div className="os-dock-divider" />{appItems.map(item => { const Icon=item.icon; return <button key={item.id} title={item.label} aria-label={item.label} className={'os-dock-app ' + (view === item.id ? 'active' : '')} onClick={() => navigateTo(item.id)}><Icon size={18} /><i /></button>; })}<div className="os-dock-spacer" /><button className="os-dock-search" onClick={() => { setCommandOpen(true); setLauncherOpen(false); }}><Activity size={15} /><span>Quick search</span><kbd>⌘ K</kbd></button><div className="os-dock-status"><span className="os-live-dot" /> LOCAL CORE</div></footer>
   </div>;
 }
@@ -279,9 +298,9 @@ function ExperimentView({ state, dispatch }: { state: AtmState; dispatch: Dispat
   </>;
 }
 
-function JournalView({ events, alerts }: { events: JournalEvent[]; alerts: number }) {
+function JournalView({ events, alerts, onExport }: { events: JournalEvent[]; alerts: number; onExport: (format: 'json' | 'csv') => void }) {
   return <>
-    <ScreenHeading number="05" eyebrow="TRACEABLE RUN HISTORY" title="Event journal" description="Controller observations, policy findings and actual virtual-gate outcomes." />
+    <ScreenHeading number="05" eyebrow="TRACEABLE RUN HISTORY" title="Event journal" description="Controller observations, policy findings and actual virtual-gate outcomes." action={<div className="journal-export-actions"><button className="quiet-button" onClick={() => onExport('json')}><FileText size={13} /> Export JSON</button><button className="quiet-button" onClick={() => onExport('csv')}><Activity size={13} /> Export CSV</button></div>} />
     <div className="journal-stats"><div><span>RECORDED EVENTS</span><strong>{events.length.toString().padStart(3,'0')}</strong></div><div><span>ALERT / WARNING EVENTS</span><strong>{alerts.toString().padStart(3,'0')}</strong></div><div><span>DATA PROVENANCE</span><strong>SIMULATION</strong></div></div>
     <div className="journal-list">{events.length === 0 ? <div className="empty-state">No events in this run.</div> : events.map(event => <JournalRow key={event.id} event={event} />)}</div>
   </>;
