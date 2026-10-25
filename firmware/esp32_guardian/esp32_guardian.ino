@@ -173,7 +173,8 @@ void handleUnoLine(char *line) {
   lastValidUnoAt = millis();
 
   if (strcmp(type, "HELLO") == 0) {
-    revoke("Unexpected repeated HELLO in established session.");
+    if (!payloadHas(payload, "UNO-SENTINEL-V1")) { revoke("Unexpected repeated HELLO payload."); return; }
+    sendFrame("ACK", "HELLO_ALREADY_ACCEPTED");
   } else if (strcmp(type, "HEARTBEAT") == 0) {
     if (!allowedState(payload)) {
       revoke("Illegal controller state in heartbeat.");
@@ -188,7 +189,7 @@ void handleUnoLine(char *line) {
     mode = revokeLatched ? REVOKED : OBSERVING;
     if (!revokeLatched) {
       mode = PERMITTED;
-      sendFrame("PERMIT", "FRESH;source=PROTOCOL_VALIDATED;note=not_attestation");
+      sendFrame("PERMIT", "FRESH");
     }
   } else if (strcmp(type, "STATE") == 0) {
     if (!allowedState(payload)) {
