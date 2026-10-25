@@ -284,7 +284,7 @@ void loop() {
     } else if (command == "fixture_revoke") {
       revoke("SIMULATED: operator-injected guardian test fixture.");
     } else if (command == "recover") {
-      Serial.println(F("[RECOVERY] Latched revocation cannot be cleared in-session. Reset/reflash both boards for a fresh session.");
+      Serial.println(F("[RECOVERY] Latched revocation cannot be cleared in-session. Reset/reflash both boards for a fresh session."));
     } else if (command.length() > 0) {
       Serial.println(F("Commands: status, fixture_revoke, recover"));
     }
