@@ -1,4 +1,5 @@
-const { app, BrowserWindow, ipcMain, Menu, session } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, session, dialog } = require('electron');
+const fs = require('node:fs/promises');
 const path = require('node:path');
 const { SerialManager } = require('./serial-manager.cjs');
 
@@ -58,6 +59,38 @@ ipcMain.handle('desktop:runtime', event => {
   assertTrustedSender(event);
   return { platform: process.platform, version: app.getVersion(), packaged: app.isPackaged, appName: app.getName() };
 });
+ipcMain.handle('data:export-file', async (event, request) => {
+  assertTrustedSender(event);
+  if (!request || !['json', 'csv'].includes(request.format) || typeof request.content !== 'string') {
+    return { ok: false, error: 'Invalid export request.' };
+  }
+  if (Buffer.byteLength(request.content, 'utf8') > 5 * 1024 * 1024) {
+    return { ok: false, error: 'Export exceeds the 5 MiB safety limit.' };
+  }
+  const extension = request.format;
+  const fallback = extension === 'json' ? 'sentinel-evidence.json' : 'sentinel-evidence.csv';
+  const fileName = typeof request.fileName === 'string' && /^[a-zA-Z0-9._-]{1,80}$/.test(request.fileName)
+    ? request.fileName
+    : fallback;
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Export SENTINEL evidence',
+    defaultPath: path.join(app.getPath('documents'), fileName),
+    buttonLabel: 'Export evidence',
+    filters: [{ name: extension.toUpperCase() + ' evidence', extensions: [extension] }]
+  });
+  if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+  try {
+    await fs.writeFile(result.filePath, request.content, { encoding: 'utf8', flag: 'w' });
+    return { ok: true, filePath: result.filePath };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+ipcMain.handle('data:user-data-path', event => {
+  assertTrustedSender(event);
+  return app.getPath('userData');
+});
+
 ipcMain.handle('serial:list-ports', async event => {
   assertTrustedSender(event);
   return { ports: await serialManager.listPorts() };
