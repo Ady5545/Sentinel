@@ -1,0 +1,41 @@
+name: Build SENTINEL board firmware
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "firmware/**"
+      - ".github/workflows/firmware-build.yml"
+  pull_request:
+    paths:
+      - "firmware/**"
+      - ".github/workflows/firmware-build.yml"
+  workflow_dispatch:
+
+jobs:
+  compile:
+    name: Compile ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Arduino Uno
+            fqbn: arduino:avr:uno
+            core: arduino:avr@1.8.6
+            sketch: firmware/uno_controller
+          - name: ESP32 Dev Module
+            fqbn: esp32:esp32:esp32
+            core: esp32:esp32@3.0.7
+            sketch: firmware/esp32_guardian
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+      - name: Update package indexes
+        run: arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+      - name: Install board core
+        run: arduino-cli core install "${{ matrix.core }}" --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+      - name: Compile firmware
+        run: arduino-cli compile --warnings all --fqbn "${{ matrix.fqbn }}" "${{ matrix.sketch }}"
