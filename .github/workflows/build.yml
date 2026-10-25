@@ -25,7 +25,10 @@ jobs:
           node-version: 22
       - name: Install dependencies
         run: npm install --no-audit --no-fund
-      - name: Check bridge syntax
-        run: node --check server/index.mjs
       - name: Build web application
         run: npm run build
+      - name: Verify static deployment assets
+        run: |
+          test -f dist/index.html
+          test -f dist/favicon.svg
+          grep -q '/Sentinel/assets/' dist/index.html
