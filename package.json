@@ -1,8 +1,8 @@
 {
   "name": "sentinel-atm-simulator",
-  "productName": "SENTINEL ATM Simulator",
-  "version": "0.2.0",
-  "description": "Offline-first educational ATM emulation and controller-integrity experiment",
+  "productName": "SENTINEL Research Environment",
+  "version": "0.3.0",
+  "description": "Offline-first native security research environment for ATM emulation and controller-integrity experiments",
   "author": "SENTINEL Research Prototype",
   "private": true,
   "main": "electron/main.cjs",
@@ -38,8 +38,8 @@
     "wait-on": "^8.0.4"
   },
   "build": {
-    "appId": "org.sentinel.atm-simulator",
-    "productName": "SENTINEL ATM Simulator",
+    "appId": "org.sentinel.research-environment",
+    "productName": "SENTINEL Research Environment",
     "directories": {
       "output": "release"
     },
