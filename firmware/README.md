@@ -1,6 +1,6 @@
 # SENTINEL board firmware
 
-This folder contains the first Arduino sketches for the existing two-board research prototype.
+This folder contains the first Arduino sketches for the existing two-board research prototype. GitHub Actions compiles both targets on firmware changes; a successful compile is not a substitute for a physical bench test.
 
 - [Arduino Uno controller](uno_controller/uno_controller.ino)
 - [ESP32 independent guardian](esp32_guardian/esp32_guardian.ino)
