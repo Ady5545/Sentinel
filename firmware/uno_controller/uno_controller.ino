@@ -97,7 +97,7 @@ void sendFrame(const char *type, const char *payload) {
   GuardianSerial.print('\n');
 }
 
-bool parseFrame(char *line, char fields[6][32], uint32_t &seqOut) {
+bool parseFrame(char *line, char fields[6][48], uint32_t &seqOut) {
   size_t len = strlen(line);
   if (len < 12 || len > FRAME_MAX - 1) return false;
   char *lastSep = strrchr(line, '|');
@@ -139,7 +139,7 @@ void enterLock(const char *reason) {
 }
 
 void handleGuardianLine(char *line) {
-  char fields[6][32] = {{0}};
+  char fields[6][48] = {{0}};
   uint32_t seq = 0;
   if (!parseFrame(line, fields, seq)) {
     enterLock("Malformed frame or CRC/session validation failure.");
