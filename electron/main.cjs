@@ -4,7 +4,7 @@ const { SerialManager } = require('./serial-manager.cjs');
 
 const serialManager = new SerialManager();
 let mainWindow = null;
-app.setAppUserModelId('org.sentinel.atm-simulator');
+app.setAppUserModelId('org.sentinel.research-environment');
 
 function assertTrustedSender(event) {
   if (!mainWindow || event.sender !== mainWindow.webContents) throw new Error('Blocked IPC from an untrusted renderer.');
@@ -13,7 +13,7 @@ function assertTrustedSender(event) {
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440, height: 920, minWidth: 900, minHeight: 640,
-    title: 'SENTINEL ATM Simulator', backgroundColor: '#11171d', show: false,
+    title: 'SENTINEL Research Environment', backgroundColor: '#11171d', show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true, nodeIntegration: false, sandbox: true,
@@ -22,6 +22,15 @@ function createWindow() {
   });
   mainWindow.once('ready-to-show', () => mainWindow && mainWindow.show());
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.webContents.on('did-fail-load', (_event, code, description, validatedURL, isMainFrame) => {
+    if (isMainFrame) console.error('[SENTINEL] Renderer failed to load:', { code, description, validatedURL });
+  });
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error('[SENTINEL] Renderer process exited:', details);
+  });
+  mainWindow.webContents.on('console-message', (_event, details) => {
+    if (details.level >= 2) console.error('[SENTINEL renderer]', details.message);
+  });
   mainWindow.webContents.on('will-navigate', (event, url) => {
     const dev = process.env.VITE_DEV_SERVER_URL && url.startsWith(process.env.VITE_DEV_SERVER_URL);
     const packagedLocal = app.isPackaged && url.startsWith('file:');
@@ -78,9 +87,12 @@ serialManager.on('event', payload => {
 
 app.whenReady().then(() => {
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-    const connectSource = process.env.VITE_DEV_SERVER_URL ? "'self' http://127.0.0.1:5173 ws://127.0.0.1:5173" : "'self'";
+    const dev = Boolean(process.env.VITE_DEV_SERVER_URL) && !app.isPackaged;
+    const connectSource = dev ? "'self' http://127.0.0.1:5173 ws://127.0.0.1:5173" : "'self'";
+    // Vite's development client requires inline bootstrap/eval; packaged builds remain strict.
+    const scriptSource = dev ? "'self' 'unsafe-inline' 'unsafe-eval' http://127.0.0.1:5173" : "'self'";
     callback({ responseHeaders: { ...details.responseHeaders, 'Content-Security-Policy': [
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src " + connectSource + "; object-src 'none'; base-uri 'self'; form-action 'self'"
+      "default-src 'self'; script-src " + scriptSource + "; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src " + connectSource + "; object-src 'none'; base-uri 'self'; form-action 'self'"
     ] } });
   });
   createMenu();
