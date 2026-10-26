@@ -616,7 +616,6 @@ function HILOperatorControls({ pairReady, unoConnected, sendCommand, researchMod
   sendCommand: (command: UnoOperatorCommand) => Promise<{ ok: boolean; error?: string; commandName?: string; sensitive?: boolean }>;
   researchMode: ResearchRunRecord['mode'];
   researchPhase: ResearchRunRecord['phase'];
-  hilShadow: HilShadowState;
   hilTransaction: HilTransaction | null;
 }) {
   const customerOpsAllowed = pairReady && researchMode === 'HIL' && researchPhase === 'ACTIVE' && canBeginHilWithdrawal(hilTransaction);
@@ -724,6 +723,7 @@ function HardwareView({ ports, chosenPort, setChosenPort, boards, message, seria
   sendTypedCommand: (command: UnoOperatorCommand) => Promise<{ ok: boolean; error?: string; commandName?: string; sensitive?: boolean }>;
   researchMode: ResearchRunRecord['mode'];
   researchPhase: ResearchRunRecord['phase'];
+  hilShadow: HilShadowState;
   hilTransaction: HilTransaction | null;
   boardBootEpochs: HilBoardResetEpochs;
   hilFaultResetBaseline: HilBoardResetEpochs | null;
