@@ -10,6 +10,12 @@ type SentinelParsedBoardEvent = {
   amount?: number;
   balance?: number;
   reason?: string;
+  card?: string;
+  notes500?: number;
+  notes200?: number;
+  notes100?: number;
+  notes50?: number;
+  total?: number;
 };
 type SentinelReadinessBoard = {
   device: SentinelDevice;
@@ -28,14 +34,15 @@ declare global {
       exportEvidence: (request: { format: 'json' | 'csv'; fileName?: string; content: string }) => Promise<{ ok: boolean; canceled?: boolean; filePath?: string; error?: string }>;
       getUserDataPath: () => Promise<string>;
       listSerialPorts: () => Promise<{ ports: Array<{ path: string; manufacturer?: string; serialNumber?: string; vendorId?: string; productId?: string }> }>;
-      getSerialReadiness: () => Promise<{ pairReady: boolean; freshnessMs: number; boards: Record<SentinelDevice, SentinelReadinessBoard> }>;
+      getSerialReadiness: () => Promise<{ pairReady: boolean; freshnessMs: number; researchMode: 'SIMULATION' | 'HIL'; boards: Record<SentinelDevice, SentinelReadinessBoard> }>;
+      setResearchMode: (mode: 'SIMULATION' | 'HIL') => Promise<{ ok: boolean; mode?: 'SIMULATION' | 'HIL'; error?: string }>;
       connectBoard: (request: { device: SentinelDevice; path: string; baudRate: number }) => Promise<{ ok: boolean; error?: string; sessionId?: string; phase?: SentinelBoardPhase }>;
       disconnectBoard: (device: SentinelDevice) => Promise<{ ok: boolean; error?: string }>;
       sendBoardCommand: (request: { device: SentinelDevice; command: { name: string; args: string[] } }) => Promise<{ ok: boolean; error?: string; requestId?: string; commandName?: string; sensitive?: boolean }>;
       onSerialEvent: (callback: (event: {
         kind: string; code?: string; device: SentinelDevice; path?: string; line?: string; message?: string;
         at?: number; commandName?: string; sensitive?: boolean; requestId?: string; sessionId?: string;
-        phase?: SentinelBoardPhase; parsed?: SentinelParsedBoardEvent;
+        phase?: SentinelBoardPhase; parsed?: SentinelParsedBoardEvent; mode?: 'SIMULATION' | 'HIL';
       }) => void) => () => void;
     };
   }
