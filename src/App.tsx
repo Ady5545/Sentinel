@@ -8,14 +8,16 @@ import {
   atmReducer, initialAtmState,
   type AtmAction, type AtmState, type JournalEvent, type Service
 } from './core/atm-engine';
+import {
+  canBeginHilWithdrawal, parseKeyValueText, redactSensitiveSerialText, reduceHilTransaction,
+  type HilTransaction
+} from './core/hil-evidence';
 
 type View = 'terminal' | 'machine' | 'sentinel' | 'experiments' | 'journal' | 'hardware';
 type DeviceKey = 'uno' | 'sentinel';
 type Port = { path: string; manufacturer?: string; vendorId?: string; productId?: string; serialNumber?: string };
-type BoardPhase = 'DISCONNECTED' | 'USB OPEN' | 'BOOTED' | 'NEGOTIATING' | 'HEALTHY' | 'OBSERVING' | 'REVOKED' | 'ERROR';
-type BoardState = { connected: boolean; path: string; lastLine: string; phase: BoardPhase; error?: string };
-type HilTransactionPhase = 'REQUESTED' | 'PERMIT OBSERVED' | 'UNO COMMITTED' | 'RECONCILED' | 'DENIED' | 'REVOKED' | 'MISMATCH';
-type HilTransaction = { id: string; amount: number; phase: HilTransactionPhase; unoCommitSeen: boolean; guardianCommitSeen: boolean; balance?: number; message: string };
+type BoardPhase = 'DISCONNECTED' | 'USB OPEN' | 'BOOTED' | 'NEGOTIATING' | 'HEALTHY' | 'OBSERVING' | 'STALE' | 'REVOKED' | 'ERROR';
+type BoardState = { connected: boolean; path: string; lastLine: string; lastLineAt: number; phase: BoardPhase; error?: string };
 const serviceList: { id: Service; label: string; subtitle: string; icon: typeof Banknote }[] = [
   { id: 'withdrawal', label: 'Cash withdrawal', subtitle: 'Dispense virtual banknotes', icon: Banknote },
   { id: 'balance', label: 'Balance inquiry', subtitle: 'View available funds', icon: WalletCards },
@@ -24,10 +26,9 @@ const serviceList: { id: Service; label: string; subtitle: string; icon: typeof 
   { id: 'pin-change', label: 'PIN services', subtitle: 'Demonstration only', icon: LockKeyhole }
 ];
 const initialBoards: Record<DeviceKey, BoardState> = {
-  uno: { connected: false, path: '', lastLine: '', phase: 'DISCONNECTED' },
-  sentinel: { connected: false, path: '', lastLine: '', phase: 'DISCONNECTED' }
+  uno: { connected: false, path: '', lastLine: '', lastLineAt: 0, phase: 'DISCONNECTED' },
+  sentinel: { connected: false, path: '', lastLine: '', lastLineAt: 0, phase: 'DISCONNECTED' }
 };
-const parseKeyValueText = (value: string) => Object.fromEntries(value.split(';').map(part => { const index = part.indexOf('='); return index < 1 ? ['', ''] : [part.slice(0, index), part.slice(index + 1)]; }).filter(([key]) => key));
 const money = (value: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(value);
 const clock = () => new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 
@@ -44,7 +45,13 @@ export default function App() {
   const [runtime, setRuntime] = useState<{ platform: string; version: string; packaged: boolean } | null>(null);
   const [serialEvents, setSerialEvents] = useState<string[]>([]);
   const [hilTransaction, setHilTransaction] = useState<HilTransaction | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const [portMessage, setPortMessage] = useState('Board access is optional. The virtual ATM works without hardware.');
+
+  useEffect(() => {
+    const handle = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(handle);
+  }, []);
 
   useEffect(() => {
     const api = window.sentinelDesktop;
@@ -52,60 +59,11 @@ export default function App() {
     void api.getRuntimeInfo().then(setRuntime).catch(() => undefined);
     void api.listSerialPorts().then(result => setPorts(result.ports)).catch(() => undefined);
     const unsubscribe = api.onSerialEvent(event => {
-      const detail = event.kind === 'line' ? event.line : event.message || event.kind;
-      setSerialEvents(previous => [...previous.slice(-79), clock() + '  ' + event.device.toUpperCase() + '  ' + detail]);
+      const safeLine = event.kind === 'line' ? redactSensitiveSerialText(event.line || '') : '';
+      const detail = event.kind === 'line' ? safeLine : event.message || event.kind;
+      setSerialEvents(previous => [...previous.slice(-199), clock() + '  ' + event.device.toUpperCase() + '  ' + detail]);
       if (event.kind === 'line' && event.line) {
-        const line = event.line;
-        if (event.device === 'uno' && line.startsWith('ATM_EVENT|')) {
-          const [, eventName, ...detailParts] = line.split('|');
-          const fields = parseKeyValueText(detailParts.join('|'));
-          if (eventName === 'WITHDRAWAL_PENDING') {
-            const amount = Number(fields.amount);
-            if (fields.id && Number.isSafeInteger(amount) && amount > 0) {
-              setHilTransaction({ id: fields.id, amount, phase: 'REQUESTED', unoCommitSeen: false, guardianCommitSeen: false, message: 'Uno reported a pending fictional withdrawal; waiting for the guardian decision.' });
-            } else {
-              setHilTransaction({ id: fields.id || 'UNKNOWN', amount: Number.isFinite(amount) ? amount : 0, phase: 'MISMATCH', unoCommitSeen: false, guardianCommitSeen: false, message: 'Malformed board-reported withdrawal-pending event; no desktop authorization is inferred.' });
-            }
-          } else if (eventName === 'WITHDRAWAL_APPROVED') {
-            const amount = Number(fields.amount);
-            const balance = Number(fields.balance);
-            setHilTransaction(previous => {
-              if (!previous || previous.id !== fields.id || previous.amount !== amount) {
-                return { id: fields.id || 'UNKNOWN', amount: Number.isFinite(amount) ? amount : 0, phase: 'MISMATCH', unoCommitSeen: true, guardianCommitSeen: false, balance: Number.isFinite(balance) ? balance : undefined, message: 'Uno commit report did not match the active HIL request; desktop must not infer a successful dispense.' };
-              }
-              const reconciled = previous.guardianCommitSeen;
-              return { ...previous, unoCommitSeen: true, balance: Number.isFinite(balance) ? balance : previous.balance, phase: reconciled ? 'RECONCILED' : 'UNO COMMITTED', message: reconciled ? 'Uno commit and guardian reconciliation observed for the same transaction.' : 'Uno reports a commit; waiting for guardian commit reconciliation.' };
-            });
-          } else if (eventName === 'WITHDRAWAL_DENIED') {
-            setHilTransaction(previous => previous ? { ...previous, phase: 'DENIED', message: 'Uno reported a withdrawal denial. No desktop virtual-cash update is inferred.' } : previous);
-          } else if (eventName === 'GUARDIAN_REVOKED') {
-            setHilTransaction(previous => previous ? { ...previous, phase: 'REVOKED', message: 'Uno reported guardian revocation; protected HIL remains denied.' } : previous);
-          }
-        } else if (event.device === 'sentinel' && line.startsWith('[PERMIT] One-shot observation issued for ')) {
-          const match = line.slice(line.indexOf('for ') + 4).split(';');
-          const id = match[0] || '';
-          const amount = Number((match[1] || '').replace('amount=', ''));
-          setHilTransaction(previous => {
-            if (!previous || previous.id !== id || previous.amount !== amount) {
-              return { id: id || 'UNKNOWN', amount: Number.isFinite(amount) ? amount : 0, phase: 'MISMATCH', unoCommitSeen: false, guardianCommitSeen: false, message: 'Guardian permit does not match the active Uno transaction. No desktop virtual-cash update is allowed.' };
-            }
-            return { ...previous, phase: previous.unoCommitSeen ? 'UNO COMMITTED' : 'PERMIT OBSERVED', message: 'Guardian permit report matches the pending Uno transaction ID and amount; waiting for the Uno commit and guardian reconciliation.' };
-          });
-        } else if (event.device === 'sentinel' && line.startsWith('[DENY] ')) {
-          const fields = parseKeyValueText(line.slice('[DENY] '.length));
-          setHilTransaction(previous => previous && (!fields.id || fields.id === previous.id)
-            ? { ...previous, phase: 'DENIED', message: 'Guardian reported DENY' + (fields.reason ? ': ' + fields.reason : '') + '.' }
-            : previous);
-        } else if (event.device === 'sentinel' && line.includes('[AUDIT] Matching controller-reported virtual transaction commit observed.')) {
-          setHilTransaction(previous => previous ? {
-            ...previous,
-            guardianCommitSeen: true,
-            phase: previous.unoCommitSeen ? 'RECONCILED' : previous.phase,
-            message: previous.unoCommitSeen ? 'Uno commit and guardian reconciliation have both been observed for this transaction.' : 'Guardian reports matching commit reconciliation; waiting for the Uno USB commit event before showing a completed HIL result.'
-          } : previous);
-        } else if (line.includes('[REVOKE]') || line.includes('[SECURITY_LOCK]') || line.includes('GUARDIAN_STATUS|mode=REVOKED') || line.includes('GUARDIAN_REVOKED')) {
-          setHilTransaction(previous => previous ? { ...previous, phase: 'REVOKED', message: 'A board reported revocation/lock. Protected HIL is closed; reset and recommission before another transaction.' } : previous);
-        }
+        setHilTransaction(previous => reduceHilTransaction(previous, event.device, event.line || ''));
       }
       setBoards(previous => {
         const current = previous[event.device];
@@ -126,7 +84,8 @@ export default function App() {
             ...current,
             connected: event.kind === 'opened' ? true : event.kind === 'closed' || event.kind === 'error' ? false : current.connected,
             path: event.path || current.path,
-            lastLine: event.kind === 'line' ? event.line || '' : current.lastLine,
+            lastLine: event.kind === 'line' ? redactSensitiveSerialText(event.line || '') : current.lastLine,
+            lastLineAt: event.kind === 'line' ? (event.at || Date.now()) : event.kind === 'closed' || event.kind === 'error' ? 0 : current.lastLineAt,
             phase,
             error: event.kind === 'error' ? event.message : undefined
           }
@@ -169,20 +128,54 @@ export default function App() {
     if (!api) { setExportStatus('Native evidence export is available in the desktop application, not browser preview.'); return; }
     const payload = {
       product: 'SENTINEL Research Environment', schemaVersion: 1, exportedAt: new Date().toISOString(),
-      mode: state.mode, evidenceProvenance: 'SIMULATED SOFTWARE FIXTURE; NOT HARDWARE ATTESTATION',
+      mode: state.mode,
+      evidenceProvenance: 'MIXED: simulated software state plus board-reported USB console text; no cryptographic hardware attestation',
       researchLimit: 'Virtual ATM only. No real cash, bank connection, or physical dispenser.',
       summary: { accountId: state.accountId, accountBalance: state.accountBalance, cassetteCash: state.cassetteCash, dispensedTotal: state.dispensedTotal, controllerState: state.controllerState, sentinelStatus: state.sentinelStatus, lastDecision: state.lastDecision, findings: state.findings },
-      transactions: state.transactions, events: state.events
+      transactions: state.transactions,
+      events: state.events,
+      hardware: {
+        mode: 'OPTIONAL HARDWARE-IN-THE-LOOP OBSERVATION',
+        provenance: 'BOARD-REPORTED USB console text; parsed correlation is not cryptographic attestation',
+        boards: {
+          uno: { connected: boards.uno.connected, phase: boards.uno.phase, lastLineAt: boards.uno.lastLineAt, lastLine: redactSensitiveSerialText(boards.uno.lastLine) },
+          sentinel: { connected: boards.sentinel.connected, phase: boards.sentinel.phase, lastLineAt: boards.sentinel.lastLineAt, lastLine: redactSensitiveSerialText(boards.sentinel.lastLine) }
+        },
+        activeTransaction: hilTransaction,
+        recentSerialObservations: serialEvents.slice(-200).map(redactSensitiveSerialText)
+      }
     };
     const csvCell = (value: unknown) => '"' + String(value ?? '').replace(/"/g, '""') + '"';
-    const csv = ['timestamp,id,severity,source,title,detail', ...state.events.map(item => [item.at,item.id,item.severity,item.source,item.title,item.detail].map(csvCell).join(','))].join('\r\n');
+    const csvRows = [
+      ...state.events.map(item => [item.at,item.id,item.severity,item.source,item.title,item.detail].map(csvCell).join(',')),
+      ...serialEvents.slice(-200).map((line,index) => {
+        const parts = line.split(/\s+/);
+        const time = parts[0] || '';
+        const role = parts[1] || 'SYSTEM';
+        const detail = redactSensitiveSerialText(parts.slice(2).join(' '));
+        const severe = /REVOKE|SECURITY_LOCK|DENIED|MISMATCH|mode=REVOKED/i.test(detail);
+        const successful = /PERMIT|APPROVED|Accepted HEALTHY|mode=OBSERVING/i.test(detail);
+        return [time,'HIL-'+index,severe?'critical':successful?'success':'info',role,'Board serial observation',detail].map(csvCell).join(',');
+      })
+    ];
+    const csv = ['timestamp,id,severity,source,title,detail', ...csvRows].join('\r\n');
     try {
       const result = await api.exportEvidence({ format, fileName: format === 'json' ? 'sentinel-evidence.json' : 'sentinel-events.csv', content: format === 'json' ? JSON.stringify(payload, null, 2) : csv });
       setExportStatus(result.ok ? 'Evidence exported to ' + result.filePath : result.canceled ? 'Export cancelled.' : result.error || 'Export failed.');
     } catch (error) { setExportStatus(error instanceof Error ? error.message : String(error)); }
   };
-  const eventCount = state.events.length;
-  const alerts = state.events.filter(event => event.severity === 'warning' || event.severity === 'critical').length;
+  const hardwareJournalEvents: JournalEvent[] = serialEvents.slice(-80).map((entry,index) => {
+    const parts = entry.split(/\s+/);
+    const line = redactSensitiveSerialText(parts.slice(2).join(' '));
+    const severity = /REVOKE|SECURITY_LOCK|DENIED|MISMATCH|mode=REVOKED/i.test(line) ? 'critical'
+      : /PERMIT|APPROVED|Accepted HEALTHY|mode=OBSERVING/i.test(line) ? 'success' : 'info';
+    const source = parts[1] === 'UNO' ? 'UNO' : parts[1] === 'SENTINEL' ? 'SENTINEL' : 'SYSTEM';
+    return { id: 'HIL-' + index, at: parts[0] || '--:--:--', severity, source, title: 'Hardware serial observation', detail: line };
+  });
+  const combinedJournalEvents = [...state.events, ...hardwareJournalEvents].reverse();
+  const eventCount = state.events.length + hardwareJournalEvents.length;
+  const alerts = state.events.filter(event => event.severity === 'warning' || event.severity === 'critical').length +
+    hardwareJournalEvents.filter(event => event.severity === 'warning' || event.severity === 'critical').length;
   const refreshPorts = async () => {
     if (!window.sentinelDesktop) {
       setPortMessage('USB controls are available in the installed desktop app; a browser preview is not the product runtime.');
@@ -204,12 +197,12 @@ export default function App() {
     }
     const response = await window.sentinelDesktop.connectBoard({ device, path, baudRate: 115200 });
     setPortMessage(response.ok ? 'USB console open. Serial text is observational, not proof of controller integrity.' : response.error || 'Connection failed.');
-    if (response.ok) setBoards(previous => ({ ...previous, [device]: { ...previous[device], connected: true, path } }));
+    if (response.ok) setBoards(previous => ({ ...previous, [device]: { ...previous[device], connected: true, path, phase: 'USB OPEN', lastLineAt: 0 } }));
   };
   const disconnectBoard = async (device: DeviceKey) => {
     if (!window.sentinelDesktop) return;
     await window.sentinelDesktop.disconnectBoard(device);
-    setBoards(previous => ({ ...previous, [device]: { ...previous[device], connected: false, path: '', phase: 'DISCONNECTED' } }));
+    setBoards(previous => ({ ...previous, [device]: { ...previous[device], connected: false, path: '', lastLineAt: 0, phase: 'DISCONNECTED' } }));
   };
   const sendBoardCommand = async (device: DeviceKey, command: string) => {
     if (!window.sentinelDesktop) return { ok: false, error: 'Board commands require the installed desktop application.' };
@@ -256,8 +249,8 @@ export default function App() {
         {view === 'machine' && <MachineView state={state} boards={boards} />}
         {view === 'sentinel' && <SentinelView state={state} boards={boards} />}
         {view === 'experiments' && <ExperimentView state={state} dispatch={dispatch} />}
-        {view === 'journal' && <JournalView events={[...state.events].reverse()} alerts={alerts} onExport={exportEvidence} />}
-        {view === 'hardware' && <HardwareView ports={ports} chosenPort={chosenPort} setChosenPort={setChosenPort} boards={boards} message={portMessage} serialEvents={serialEvents} refresh={refreshPorts} connect={connectBoard} disconnect={disconnectBoard} sendCommand={sendBoardCommand} hilTransaction={hilTransaction} />}
+        {view === 'journal' && <JournalView events={combinedJournalEvents} alerts={alerts} onExport={exportEvidence} />}
+        {view === 'hardware' && <HardwareView ports={ports} chosenPort={chosenPort} setChosenPort={setChosenPort} boards={boards} message={portMessage} serialEvents={serialEvents} refresh={refreshPorts} connect={connectBoard} disconnect={disconnectBoard} sendCommand={sendBoardCommand} hilTransaction={hilTransaction} nowMs={nowMs} clearHilTransaction={() => setHilTransaction(null)} />}
         <footer className="status-footer"><span><i /> DOMAIN CORE ACTIVE</span><span>{eventCount.toString().padStart(3,'0')} EVENTS · {alerts.toString().padStart(2,'0')} ALERTS</span><span>FICTIONAL ACCOUNT · VIRTUAL CASH · RESEARCH PROTOTYPE</span></footer>
       </div>
     </main>
@@ -392,11 +385,14 @@ function JournalRow({ event }: { event: JournalEvent }) {
   return <article className={'journal-row severity-' + event.severity}><div className="journal-icon">{icon}</div><time>{event.at}</time><div className="journal-copy"><strong>{event.title}</strong><p>{event.detail}</p><small>{event.source} · {event.id}</small></div><span className="severity-tag">{event.severity.toUpperCase()}</span></article>;
 }
 
-function HILOperatorControls({ pairReady, unoConnected, sendCommand }: {
+function HILOperatorControls({ pairReady, unoConnected, sendCommand, hilTransaction }: {
   pairReady: boolean;
   unoConnected: boolean;
   sendCommand: (device: DeviceKey, command: string) => Promise<{ ok: boolean; error?: string; commandName?: string; sensitive?: boolean }>;
+  hilTransaction: HilTransaction | null;
 }) {
+  const customerOpsAllowed = pairReady && canBeginHilWithdrawal(hilTransaction);
+  const canConfigure = unoConnected && canBeginHilWithdrawal(hilTransaction);
   const [cardId, setCardId] = useState('CARD01');
   const [demoPin, setDemoPin] = useState('');
   const [startingBalance, setStartingBalance] = useState('50000');
@@ -442,14 +438,14 @@ function HILOperatorControls({ pairReady, unoConnected, sendCommand }: {
     await send('uno', 'SET_CASH ' + values.join(' '));
   };
   const useCard = async () => {
-    if (!pairReady) { setFeedback('Blocked: both boards must report the current healthy pair state first.'); return; }
+    if (!customerOpsAllowed) { setFeedback('Blocked: the pair is not fresh/ready or a previous HIL withdrawal is still unresolved.'); return; }
     await send('uno', 'CARD ' + cardId);
   };
   const submitPin = async () => {
     if (!/^[0-9]{4,6}$/.test(customerPin)) { setFeedback('Enter the fictional demo PIN used when provisioning.'); setCustomerPin(''); return; }
     const pin = customerPin;
     setCustomerPin('');
-    if (!pairReady) { setFeedback('Blocked: protected HIL is not ready.'); return; }
+    if (!customerOpsAllowed) { setFeedback('Blocked: the pair is not fresh/ready or a previous HIL withdrawal is still unresolved.'); return; }
     await send('uno', 'PIN ' + pin);
   };
   const withdraw = async () => {
@@ -457,7 +453,7 @@ function HILOperatorControls({ pairReady, unoConnected, sendCommand }: {
       setFeedback('Withdrawal must be a positive amount, no more than 1,000,000, and a multiple of ₹50.');
       return;
     }
-    if (!pairReady) { setFeedback('Blocked: protected HIL is not ready.'); return; }
+    if (!customerOpsAllowed) { setFeedback('Blocked: the pair is not fresh/ready or a previous HIL withdrawal is still unresolved.'); return; }
     await send('uno', 'WITHDRAW ' + withdrawAmount);
   };
   return <>
@@ -466,44 +462,57 @@ function HILOperatorControls({ pairReady, unoConnected, sendCommand }: {
       <div><label className="field-label" htmlFor="hil-pin">NEW FICTIONAL PIN</label><input id="hil-pin" type="password" inputMode="numeric" value={demoPin} onChange={event => setDemoPin(event.target.value.replace(/[^0-9]/g, '').slice(0, 6))} autoComplete="new-password" disabled={busy} /></div>
       <div><label className="field-label" htmlFor="hil-balance">STARTING BALANCE (₹)</label><input id="hil-balance" inputMode="numeric" value={startingBalance} onChange={event => setStartingBalance(event.target.value)} disabled={busy} /></div>
     </div>
-    <div className="hil-action-row"><button className="board-button" onClick={() => void provision()} disabled={!unoConnected || busy}>Provision fictional account</button></div>
+    <div className="hil-action-row"><button className="board-button" onClick={() => void provision()} disabled={!canConfigure || busy}>Provision fictional account</button></div>
     <div className="hil-setup-grid cash-counts">
       <div><label className="field-label" htmlFor="hil-c500">₹500 NOTES</label><input id="hil-c500" inputMode="numeric" value={cash500} onChange={event => setCash500(event.target.value)} disabled={busy} /></div>
       <div><label className="field-label" htmlFor="hil-c200">₹200 NOTES</label><input id="hil-c200" inputMode="numeric" value={cash200} onChange={event => setCash200(event.target.value)} disabled={busy} /></div>
       <div><label className="field-label" htmlFor="hil-c100">₹100 NOTES</label><input id="hil-c100" inputMode="numeric" value={cash100} onChange={event => setCash100(event.target.value)} disabled={busy} /></div>
       <div><label className="field-label" htmlFor="hil-c50">₹50 NOTES</label><input id="hil-c50" inputMode="numeric" value={cash50} onChange={event => setCash50(event.target.value)} disabled={busy} /></div>
     </div>
-    <div className="hil-action-row"><button className="board-button" onClick={() => void configureCash()} disabled={!unoConnected || busy}>Configure virtual cassette</button></div>
+    <div className="hil-action-row"><button className="board-button" onClick={() => void configureCash()} disabled={!canConfigure || busy}>Configure virtual cassette</button></div>
     <div className="divider-line" />
     <div className="hil-setup-grid customer-ops">
       <div><label className="field-label" htmlFor="hil-customer-pin">CUSTOMER DEMO PIN</label><input id="hil-customer-pin" type="password" inputMode="numeric" value={customerPin} onChange={event => setCustomerPin(event.target.value.replace(/[^0-9]/g, '').slice(0, 6))} autoComplete="off" disabled={busy || !pairReady} /></div>
       <div><label className="field-label" htmlFor="hil-withdraw-amount">WITHDRAWAL AMOUNT (₹)</label><input id="hil-withdraw-amount" inputMode="numeric" value={withdrawAmount} onChange={event => setWithdrawAmount(event.target.value)} disabled={busy || !pairReady} /></div>
     </div>
     <div className="hil-action-row">
-      <button className="board-button" onClick={() => void useCard()} disabled={!pairReady || busy}>Insert demo card</button>
-      <button className="board-button" onClick={() => void submitPin()} disabled={!pairReady || busy || !customerPin}>Verify PIN</button>
-      <button className="board-button" onClick={() => void send('uno', 'BALANCE')} disabled={!pairReady || busy}>Check balance</button>
-      <button className="board-button" onClick={() => void withdraw()} disabled={!pairReady || busy}>Request withdrawal</button>
-      <button className="board-button danger-command" onClick={() => void send('uno', 'FIXTURE_MISMATCH')} disabled={!pairReady || busy}>Inject synthetic mismatch</button>
+      <button className="board-button" onClick={() => void useCard()} disabled={!customerOpsAllowed || busy}>Insert demo card</button>
+      <button className="board-button" onClick={() => void submitPin()} disabled={!customerOpsAllowed || busy || !customerPin}>Verify PIN</button>
+      <button className="board-button" onClick={() => void send('uno', 'BALANCE')} disabled={!customerOpsAllowed || busy}>Check balance</button>
+      <button className="board-button" onClick={() => void withdraw()} disabled={!customerOpsAllowed || busy}>Request withdrawal</button>
+      <button className="board-button danger-command" onClick={() => void send('uno', 'FIXTURE_MISMATCH')} disabled={!customerOpsAllowed || busy}>Inject synthetic mismatch</button>
     </div>
     {feedback && <div className="hardware-notice"><CircleAlert size={16} /><p>{feedback}</p></div>}
     <p className="muted-note">All values are fictional and RAM-only on the boards. Provisioning does not mean the board accepted it until a corresponding ATM_EVENT appears. PIN fields are cleared after use and are not copied into the serial event journal.</p>
   </>;
 }
 
-function HardwareView({ ports, chosenPort, setChosenPort, boards, message, serialEvents, refresh, connect, disconnect, sendCommand, hilTransaction }: {
+function HardwareView({ ports, chosenPort, setChosenPort, boards, message, serialEvents, refresh, connect, disconnect, sendCommand, hilTransaction, nowMs, clearHilTransaction }: {
   ports: Port[]; chosenPort: Record<DeviceKey, string>;
   setChosenPort: Dispatch<SetStateAction<Record<DeviceKey, string>>>;
   boards: Record<DeviceKey, BoardState>; message: string; serialEvents: string[];
   refresh: () => void; connect: (device: DeviceKey) => void; disconnect: (device: DeviceKey) => void;
   sendCommand: (device: DeviceKey, command: string) => Promise<{ ok: boolean; error?: string; commandName?: string; sensitive?: boolean }>;
   hilTransaction: HilTransaction | null;
+  nowMs: number;
+  clearHilTransaction: () => void;
 }) {
   const [drafts, setDrafts] = useState<Record<DeviceKey, string>>({ uno: 'STATUS', sentinel: 'STATUS' });
   const [commandBusy, setCommandBusy] = useState(false);
   const [commandFeedback, setCommandFeedback] = useState('');
-  const pairReady = boards.uno.connected && boards.sentinel.connected &&
+  const isFresh = (device: DeviceKey) => boards[device].connected && boards[device].lastLineAt > 0 &&
+    nowMs - boards[device].lastLineAt <= 3500;
+  const phaseForDisplay = (device: DeviceKey): BoardPhase => {
+    const board = boards[device];
+    if (board.connected && ['HEALTHY', 'OBSERVING'].includes(board.phase) && !isFresh(device)) return 'STALE';
+    return board.phase;
+  };
+  const pairReady = isFresh('uno') && isFresh('sentinel') &&
     boards.uno.phase === 'HEALTHY' && boards.sentinel.phase === 'OBSERVING';
+  const canClearHilRecord = Boolean(hilTransaction && (
+    hilTransaction.phase === 'RECONCILED' || hilTransaction.phase === 'DENIED' ||
+    ((hilTransaction.phase === 'REVOKED' || hilTransaction.phase === 'MISMATCH') && pairReady)
+  ));
   const runCommand = async (device: DeviceKey) => {
     const command = drafts[device];
     if (!boards[device].connected) {
@@ -539,8 +548,8 @@ function HardwareView({ ports, chosenPort, setChosenPort, boards, message, seria
     <div className="hardware-notice"><CircleAlert size={16} /><p>{message}<br /><strong>Close Arduino IDE Serial Monitor before connecting the same port.</strong> Each USB port must have one owner. Local write success is not board acceptance.</p></div>
     <section className="data-panel">
       <PanelTitle icon={<ShieldCheck size={16} />} title="PROTECTED HIL READINESS" suffix="BOARD-REPORTED CONSOLE EVIDENCE" />
-      <div className="authority-row"><span>Uno peer status</span><b className={boards.uno.phase === 'HEALTHY' ? 'green-text' : boards.uno.phase === 'REVOKED' || boards.uno.phase === 'ERROR' ? 'red-text' : ''}>{boards.uno.phase}</b></div>
-      <div className="authority-row"><span>ESP32 guardian state</span><b className={boards.sentinel.phase === 'OBSERVING' ? 'green-text' : boards.sentinel.phase === 'REVOKED' || boards.sentinel.phase === 'ERROR' ? 'red-text' : ''}>{boards.sentinel.phase}</b></div>
+      <div className="authority-row"><span>Uno peer status</span><b className={phaseForDisplay('uno') === 'HEALTHY' ? 'green-text' : phaseForDisplay('uno') === 'REVOKED' || phaseForDisplay('uno') === 'ERROR' || phaseForDisplay('uno') === 'STALE' ? 'red-text' : ''}>{phaseForDisplay('uno')}</b></div>
+      <div className="authority-row"><span>ESP32 guardian state</span><b className={phaseForDisplay('sentinel') === 'OBSERVING' ? 'green-text' : phaseForDisplay('sentinel') === 'REVOKED' || phaseForDisplay('sentinel') === 'ERROR' || phaseForDisplay('sentinel') === 'STALE' ? 'red-text' : ''}>{phaseForDisplay('sentinel')}</b></div>
       <div className="authority-row"><span>Protected HIL</span><b className={pairReady ? 'green-text' : 'red-text'}>{pairReady ? 'OBSERVED READY' : 'NOT READY — DENY'}</b></div>
       <p className="muted-note">Readiness is inferred from specific serial-console lines and is still board-reported, not cryptographic attestation. The application fails closed when these lines are missing.</p>
     </section>
@@ -565,7 +574,7 @@ function HardwareView({ ports, chosenPort, setChosenPort, boards, message, seria
     <section className="data-panel hil-operator-panel">
       <PanelTitle icon={<Cpu size={16} />} title="UNO / SENTINEL OPERATOR WORKFLOW" suffix="FICTIONAL DEMO ONLY" />
       <p className="muted-note">This panel sends allowlisted commands to the connected boards. It does not drive physical cash hardware. A local USB write is not proof the board accepted a command.</p>
-      <HILOperatorControls pairReady={pairReady} unoConnected={boards.uno.connected} sendCommand={sendCommand} />
+      <HILOperatorControls pairReady={pairReady} unoConnected={boards.uno.connected} sendCommand={sendCommand} hilTransaction={hilTransaction} />
     </section>
     <section className="data-panel hil-transaction-panel">
       <PanelTitle icon={<Activity size={16} />} title="HIL TRANSACTION CORRELATION" suffix="BOARD-REPORTED / PROTOCOL-EVIDENCE" />
@@ -577,6 +586,8 @@ function HardwareView({ ports, chosenPort, setChosenPort, boards, message, seria
         {hilTransaction.balance !== undefined && <div className="authority-row"><span>Uno-reported remaining balance</span><b>{money(hilTransaction.balance)}</b></div>}
         <p className="muted-note">{hilTransaction.message}</p>
         <p className="muted-note">{hilTransaction.phase === 'RECONCILED' ? 'Both relevant board reports have been observed for this transaction. This remains board-reported evidence, not cryptographic attestation; no desktop shadow-cash mutation is performed by this initial bridge.' : 'The desktop does not mark this as a completed HIL withdrawal or change its software-simulation ledger.'}</p>
+        <button className="quiet-button" onClick={clearHilTransaction} disabled={!canClearHilRecord}>Clear displayed terminal record</button>
+        {(['REVOKED', 'MISMATCH'].includes(hilTransaction.phase) && !pairReady) && <p className="muted-note">After a paired board reset and successful new readiness sequence, this display can be cleared. Clearing the display alone never clears a board fault.</p>}
       </>}
     </section>
     {commandFeedback && <div className="hardware-notice"><CircleAlert size={16} /><p>{commandFeedback}</p></div>}
