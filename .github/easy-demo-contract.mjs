@@ -39,7 +39,7 @@ test('Uno denies virtual dispensing if guardian is stale, pending, or revoked', 
 test('ESP32 revocation is latched and documented as a simulated demo event', () => {
   assert.match(esp, /if \(revoked\) return/);
   assert.match(esp, /software-generated demo event, not proof of real hardware compromise/);
-  assert.match(uno, /Sent does not prove 'received'/);
+  assert.match(uno, /'Sent' does not prove 'received'/);
 });
 
 test('operator commands are intentionally small and hardcoded', () => {
