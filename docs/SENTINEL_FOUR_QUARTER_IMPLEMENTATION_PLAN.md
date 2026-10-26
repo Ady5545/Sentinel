@@ -2,7 +2,7 @@
 
 **Created:** 26 October 2026  
 **Repository:** `Ady5545/Sentinel`  
-**Working branch:** `feat/implementation-quarter-3-2026-10-27`  
+**Working branch:** `feat/implementation-quarter-4-2026-10-27`  
 **Rule:** Deliver the remaining work in four approximately equal 25% quarters. Existing implemented work is preserved; only audited gaps are changed. By explicit user direction, Quarter 2 began while Quarter 1's separate audit remains open; this does not mark Quarter 1 complete. Quarter 3 must not begin until Quarter 2's exit gate is verified.
 
 ## Quarter 1 — Authority and protocol reliability (0–25%)
@@ -51,13 +51,19 @@
 
 ## Quarter 4 — Qualification, packaging and demonstration (75–100%)
 
-- Run the complete automated suite on one pinned commit and verify macOS Apple Silicon and Windows x64 artifacts.
-- Complete the physical wire/logic-level check, paired startup/reconnect matrix, 100 clean starts, 30-minute idle observation, and allowed/denied transaction cases with redacted paired logs.
-- Mark every physical test PASS / FAIL / NOT RUN; do not infer hardware success from compilation or simulated tests.
-- Validate offline installed-app behavior, source/artifact checksums and operator flows.
-- Prepare a truthful demonstration and report, clearly distinguishing software fixtures, board-reported events and protocol-validated evidence.
+By explicit user direction, Quarter 4 has started on its own branch before Quarter 3's final exit audit is closed. This is a stacked working slice, not a declaration that Q3 or physical HIL qualification is complete.
 
-**Quarter 4 exit gate:** The release package and demo trace to the exact tested commit, with physical limitations and any unrun checks explicitly stated.
+- [x] Add a pinned-source SHA-256 artifact manifest writer/verifier, including sidecar verification and tamper detection tests.
+- [x] Add a machine-readable qualification matrix with explicit PASS / FAIL / NOT RUN / PENDING states; all physical tests start NOT RUN.
+- [x] Add a reproducible physical qualification procedure for safe UART logic levels, paired startup/reconnect, 100 clean starts, 30-minute idle, allowed/denied flows and provenance-safe demonstration evidence.
+- [x] Add the qualification manifest checks to the automated build and release package workflows.
+- [ ] Run the exact Quarter 4 candidate through complete automated tests and package macOS Apple Silicon plus Windows x64 artifacts from the same pinned commit.
+- [ ] Verify the resulting package manifests and SHA-256 checksums against each artifact and the same source commit.
+- [ ] Validate installed-app offline behavior and operator flows on the target OSes with attributable evidence.
+- [ ] Perform physical wire/logic-level inspection, paired start/reconnect matrix, 100 clean starts, 30-minute idle, and allowed/denied transaction cases with redacted paired logs. These cannot be marked PASS by CI.
+- [ ] Publish a truthful demonstration report distinguishing synthetic fixtures, board-reported events and protocol-validated evidence.
+
+**Quarter 4 exit gate:** The release package and demo trace to the exact tested commit, with physical limitations and all unrun checks explicitly stated. Quarter 4 is **IN PROGRESS**.
 
 ## Progress ledger
 
@@ -74,7 +80,10 @@
 | Quarter 2 test coverage | **Passed on corrected source/test revision** | `electron/serial-manager.node-test.cjs`, `src/core/hil-evidence.test.ts`; [latest workflow run 40373668284](https://github.com/Ady5545/Sentinel/actions/runs/40373668284) passed |
 | Quarter 2 overall | **IMPLEMENTED — automated CI PASS** | Bridge hardening, typed parser, paired-reset fault latch, non-ASCII rejection, tests and renderer build passed on `b1698dc038258932723909711407afe3e284a0cc` in [run 40373835953](https://github.com/Ady5545/Sentinel/actions/runs/40373835953). Physical paired-board behavior remains NOT VERIFIED. |
 | Physical UART qualification | **NOT VERIFIED** | Requires actual Uno + ESP32 paired logs; code changes cannot establish it |
+| Quarter 4 integrity tooling | **IMPLEMENTED — CI pending** | `scripts/release-qualification.mjs` creates/validates pinned SHA-256 manifests and rejects tampered/mismatched artifacts; `scripts/release-qualification.test.mjs` tests integrity gates |
+| Quarter 4 physical evidence matrix | **ADDED — all physical checks NOT RUN** | `docs/quarter-4-qualification-matrix.json` and `docs/SENTINEL_QUARTER_4_QUALIFICATION.md`; actual wiring/board/start/idle/transaction tests remain unperformed |
+| Quarter 4 release packaging gate | **IMPLEMENTED — exact Q4 run pending** | `build.yml` runs qualification-tool tests; `desktop-release.yml` will produce per-platform package manifests on Q4 branch/PR and verify them before artifact upload |
 | Quarter 3 coordinator/replay | **FIRST SLICE IMPLEMENTED — automated CI PASS** | `src/core/research-session.ts`, `src/core/research-session.test.ts`, app integration in `src/App.tsx`; immutable versioned run snapshots, typed HIL command gating, synthetic-only replay and provenance-labelled JSON/CSV export passed in [run 40381930063](https://github.com/Ady5545/Sentinel/actions/runs/40381930063); current plan-updated head reverified in [run 40382117517](https://github.com/Ady5545/Sentinel/actions/runs/40382117517) |
 | Quarter 3 overall | **IN PROGRESS** | First slice passes automated CI. The actual desktop virtual-cash shadow now updates only through `reconcileHilShadowCommit` after exact permit/Uno commit/guardian reconciliation, and is quarantined on reset or transport loss. Remaining work: end-to-end UI/session audit and physical HIL qualification (not established by CI). |
 
-Quarter 1's open audit remains explicitly tracked and must not be represented as complete. Quarter 2's automated exit gate was satisfied on its exact branch head by [run 40373835953](https://github.com/Ady5545/Sentinel/actions/runs/40373835953); Quarter 3 implementation is now underway by user direction. Physical UART/HIL behavior remains NOT VERIFIED.
+Quarter 1 remains IN PROGRESS. Quarter 2's automated exit gate passed in [run 40373835953](https://github.com/Ady5545/Sentinel/actions/runs/40373835953). Quarter 3's first implementation slice passed automated verification, but its end-to-end exit audit remains open. By explicit user direction, Quarter 4 qualification and packaging work is now running in parallel on `feat/implementation-quarter-4-2026-10-27`. Physical UART/HIL behavior remains NOT VERIFIED until actual paired-board evidence exists.
