@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('sentinelDesktop', {
   listSerialPorts: () => ipcRenderer.invoke('serial:list-ports'),
   getSerialReadiness: () => ipcRenderer.invoke('serial:readiness'),
   setResearchMode: mode => ipcRenderer.invoke('serial:set-research-mode', mode),
+  clearHilFault: () => ipcRenderer.invoke('serial:clear-hil-fault'),
   connectBoard: request => ipcRenderer.invoke('serial:connect', request),
   disconnectBoard: device => ipcRenderer.invoke('serial:disconnect', device),
   sendBoardCommand: request => ipcRenderer.invoke('serial:command', request),
