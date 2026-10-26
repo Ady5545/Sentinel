@@ -538,7 +538,7 @@ void handleUsbCommand(char *line) {
     uint32_t budgetValue = budgetWindowMs, pinFailValue = pinFailuresPerWindow;
     uint32_t pinWindowValue = pinFailureWindowMs, commitValue = commitTimeoutMs;
     if (valid && argc == 9) {
-      valid = parseUnsigned(argv[3], 10000UL, hbValue) && hbValue >= 500UL &&
+      valid = parseUnsigned(argv[3], 10000UL, hbValue) && hbValue >= 700UL &&
               parseUnsigned(argv[4], 30000UL, linkValue) && linkValue > hbValue &&
               parseUnsigned(argv[5], 86400000UL, budgetValue) && budgetValue >= 60000UL &&
               parseUnsigned(argv[6], 30UL, pinFailValue) && pinFailValue >= 3UL &&
