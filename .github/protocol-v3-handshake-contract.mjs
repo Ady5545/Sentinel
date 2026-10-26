@@ -18,9 +18,9 @@ test("both endpoints use S3 framing and V3 identities", () => {
 });
 
 test("retries preserve startup message identities instead of incrementing sequence counters", () => {
-  const unoHello = /sendFrameAtSequence\\s*\(\s*F\("HELLO"\)\s*,\s*F\("UNO-ATM-V3"\)\s*,\s*1\s*\)/g;
+  const unoHello = /sendFrameAtSequence\s*\(\s*F\("HELLO"\)\s*,\s*F\("UNO-ATM-V3"\)\s*,\s*1\s*\)/g;
   assert.ok((uno.match(unoHello) ?? []).length >= 2, "Uno must retry the same HELLO at sequence 1");
-  assert.match(uno, /sendFrameAtSequence\\s*\(\s*F\("ACK"\)\s*,\s*F\("HELLO_ACCEPTED"\)\s*,\s*2\s*\)/);
+  assert.match(uno, /sendFrameAtSequence\s*\(\s*F\("ACK"\)\s*,\s*F\("HELLO_ACCEPTED"\)\s*,\s*2\s*\)/);
   const espHello = /sendFrameAtSequence\s*\(\s*"HELLO"\s*,\s*"ESP32-SENTINEL-V3"\s*,\s*1\s*\)/g;
   assert.ok((esp.match(espHello) ?? []).length >= 2, "ESP32 must retry the same HELLO at sequence 1");
   assert.match(esp, /sendFrameAtSequence\s*\(\s*"ACK"\s*,\s*"HELLO_ACCEPTED"\s*,\s*2\s*\)/);
@@ -44,7 +44,7 @@ test("Uno is not ready after the first guardian HELLO; final ACK completes the h
   const ackBranch = handler.search(/if\s*\(\s*STREQ\(type,\s*"ACK"\)\s*\)/);
   const readySet = handler.search(/handshakeComplete\s*=\s*true\s*;/);
   assert.ok(helloBranch >= 0 && ackBranch > helloBranch && readySet > ackBranch);
-  assert.match(handler.slice(helloBranch, ackBranch), /sendFrameAtSequence\\s*\(\s*F\("ACK"\)\s*,\s*F\("HELLO_ACCEPTED"\)\s*,\s*2\s*\)/);
+  assert.match(handler.slice(helloBranch, ackBranch), /sendFrameAtSequence\s*\(\s*F\("ACK"\)\s*,\s*F\("HELLO_ACCEPTED"\)\s*,\s*2\s*\)/);
   assert.doesNotMatch(handler.slice(helloBranch, ackBranch), /handshakeComplete\s*=\s*true/);
 });
 
