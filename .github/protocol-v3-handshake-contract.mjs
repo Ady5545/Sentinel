@@ -76,15 +76,16 @@ test("Uno serializes heartbeat/status traffic over its timed peer UART", () => {
   assert.match(uno.slice(statusBranch, statusBranch + 420), /awaitingGuardianStatus\s*=\s*false\s*;/);
   assert.match(esp, /pendingHealthyStatus\s*=\s*true;/);
   assert.match(esp, /HEALTHY_STATUS_TURNAROUND_MS\s*=\s*100UL/);
-  assert.match(esp, /if\s*\(pendingHealthyStatus[\s\S]*?sendFrameAtSequence\("STATUS",\s*"HEALTHY",\s*healthyStatusSequence\)/,
-    "ESP32 must defer HEALTHY STATUS and retry the same sequence instead of replying inside the heartbeat RX handler");
+  assert.match(esp, /if\s*\(pendingHealthyStatus[\s\S]*?sendFrameAtSequence\("STATUS",\s*statusPayload,\s*healthyStatusSequence\)/,
+    "ESP32 must defer a heartbeat-bound STATUS and retry the same payload/sequence instead of replying inside the heartbeat RX handler");
   assert.match(esp, /HEALTHY_STATUS_RETRY_MS\s*=\s*250UL/);
   assert.match(esp, /HEALTHY_STATUS_MAX_ATTEMPTS\s*=\s*3/);
   assert.match(uno, /lastGuardianStatusSequence\s*!=\s*0/);
   assert.match(uno, /MAX_INITIAL_STATUS_FRAME_DROPS\s*=\s*3/);
   assert.match(protocol, /at most one.{0,80}HEARTBEAT/i);
-  assert.match(protocol, /clears the outstanding-heartbeat flag only after receiving and validating a STATUS/i);
-  assert.match(uno, /if\s*\(sendFrame\(F\("HEARTBEAT"\),\s*payload\)\)\s*\{[\s\S]{0,180}lastHeartbeatAt\s*=\s*millis\(\)/);
+  assert.match(protocol, /clears the outstanding-heartbeat flag only after receiving a well-formed STATUS with the exact outstanding/i);
+  assert.match(uno, /sendFrameAtSequence\(F\("HEARTBEAT"\),\s*payload,\s*heartbeatSequence\)/);
+  assert.match(uno, /lastHeartbeatSequence\s*=\s*heartbeatSequence/);
 });
 
 
@@ -94,7 +95,7 @@ test("Uno peer UART uses timer-assisted AltSoftSerial on fixed Uno pins", () => 
   assert.match(uno, /PEER_RX_PIN\s*=\s*8/);
   assert.match(uno, /PEER_TX_PIN\s*=\s*9/);
   assert.doesNotMatch(uno, /SoftwareSerial/);
-  assert.match(uno, /SENTINEL ATM CONTROLLER V3\.3 READY/);
+  assert.match(uno, /SENTINEL ATM CONTROLLER V3\.4 READY/);
   assert.match(protocol, /AltSoftSerial[\s\S]{0,100}D8 RX[\s\S]{0,40}D9 TX/i);
 });
 
@@ -115,7 +116,7 @@ test("ESP32 flushes completed STATUS bytes locally without claiming peer accepta
 });
 
 test("guardian commit-reconciliation log includes the exact matched transaction ID and amount", () => {
-  assert.ok(esp.includes('[AUDIT] Matching controller-reported virtual transaction commit observed id='));
+  assert.ok(esp.includes('[RECONCILE] Matching controller-reported virtual commit id='));
   assert.ok(esp.includes('Serial.print(pendingPermitId);'));
   assert.ok(esp.includes('Serial.println(pendingPermitAmount);'));
 });
@@ -132,6 +133,38 @@ test("both boards use the same slower peer UART and bounded status retry contrac
   assert.match(protocol, /UART:\*\* 4800 baud/);
   assert.match(protocol, /at most three total transmissions/);
   assert.match(protocol, /600 ms retry window/);
+});
+
+
+test("HEALTHY STATUS acknowledges the exact outstanding UNO HEARTBEAT sequence", () => {
+  assert.match(uno, /lastHeartbeatSequence\\s*=\\s*heartbeatSequence/);
+  assert.match(uno, /parseHealthyStatusAck\\(payload,\\s*statusAckSequence\\)/);
+  assert.match(uno, /statusAckSequence\\s*!=\\s*lastHeartbeatSequence/);
+  assert.match(esp, /healthyStatusAckSequence\\s*=\\s*heartbeatSequence/);
+  assert.match(esp, /HEALTHY;ack_seq=%lu/);
+  assert.match(esp, /handleHeartbeat\\(payload,\\s*seq\\)/);
+  assert.match(protocol, /HEALTHY;ack_seq=<UNO heartbeat sequence>/);
+});
+
+test("commit reconciliation uses an explicit TX_COMMITTED event schema", () => {
+  assert.match(uno, /event=TX_COMMITTED;id=%s;amount=%lu/);
+  assert.match(esp, /strcmp\\(eventName,\\s*"TX_COMMITTED"\\)\\s*==\\s*0/);
+  assert.match(esp, /payloadHasExactKeys\\(payload,\\s*commitKeys,\\s*3\\)/);
+  assert.doesNotMatch(esp, /strstr\\(payload,\\s*"id="\\)\\s*!=\\s*NULL\\s*&&\\s*awaitingCommit/);
+  assert.match(protocol, /TX_COMMITTED/);
+});
+
+test("state-changing payload schemas reject missing, duplicate, or unknown fields", () => {
+  assert.match(esp, /payloadHasExactKeys\\(payload,\\s*stateKeys,\\s*3\\)/);
+  assert.match(esp, /payloadHasExactKeys\\(payload,\\s*heartbeatKeys,\\s*2\\)/);
+  assert.match(esp, /payloadHasExactKeys\\(payload,\\s*requestKeys,\\s*2\\)/);
+  assert.match(esp, /if\\s*\\(found\\) return false/);
+  assert.match(uno, /if\\s*\\(found\\) return false/);
+});
+
+test("peer receive loops bound work per loop to preserve timeout processing", () => {
+  assert.match(uno, /MAX_PEER_RX_BYTES_PER_LOOP\\s*=\\s*64/);
+  assert.match(esp, /MAX_PEER_RX_BYTES_PER_LOOP\\s*=\\s*64/);
 });
 
 test("ESP32 safely drops malformed pre-session UART noise and keeps revocation latched", () => {

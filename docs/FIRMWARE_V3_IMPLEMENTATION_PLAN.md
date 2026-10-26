@@ -1,7 +1,7 @@
 # SENTINEL Firmware Engineering Plan — V3 Reliability and Hardening
 
-**Status:** Hardening backlog for the current V3 firmware; CI and physical bench evidence remain required  
-**Baseline:** Current V3 firmware on main; verify main HEAD before every change  
+**Status:** Active V3.4 hardening backlog; CI and physical bench evidence remain required  
+**Baseline:** V3.4 firmware on main; verify main HEAD before every change  
 **Hardware constraint:** one Arduino Uno + one ESP32 DevKit; current peer UART is Uno AltSoftSerial D8 RX / D9 TX and ESP32 UART2 GPIO16 RX / GPIO17 TX at 4800 8N1; common ground and proper level shifting are required  
 **Release rule:** a successful compile is necessary, never proof of successful hardware integration
 
@@ -40,11 +40,11 @@ Implement this plan in small reviewable phases. Do not replace both firmware fil
 
 ### Confirmed code facts behind the latest UART-status failure
 
-- Current V3 firmware uses 4800 baud, 8N1 on the peer link; HELLO retries reuse sequence 1 and the handshake is explicitly completed by a final ACK.
+- V3.4 keeps 4800 baud, 8N1 and the four-message startup handshake, and now binds each HEALTHY STATUS to the exact accepted UNO HEARTBEAT sequence via `ack_seq`.
 - The latest paired-board logs show handshake completion and a valid Uno heartbeat arriving at the ESP32; the ESP32 schedules/sends HEALTHY STATUS, while the Uno does not log an accepted HEALTHY status. The current diagnostic patch adds Uno receive-byte/complete-line counters and flushes the ESP32 UART after STATUS transmit.
 - An ESP32 `sendFrame_return=true` means the UART write was accepted locally; it does not prove the Uno received a valid frame.
-- The current V3.3 transport uses AltSoftSerial on fixed D8 RX / D9 TX; the response/retry schedule is bounded. Receiver-side byte/line counts are needed to distinguish no signal, incomplete framing, and parser rejection.
-- The equal 2.2 kΩ / 2.2 kΩ divider previously described gives roughly 2.5 V at ESP32 RX from a 5 V Uno TX, leaving almost no margin above the ESP32's specified minimum HIGH threshold. It is not a robust level-shifting design; a proper level shifter or correctly calculated divider is preferred.
+- The V3.4 transport uses AltSoftSerial on fixed D8 RX / D9 TX; peer receive work is bounded per loop and the response/retry schedule is bounded. Receiver-side byte/line counts distinguish no signal, incomplete framing, and parser rejection.
+- The ESP32 STATUS payload now includes `ack_seq=<UNO heartbeat sequence>`, and the Uno refuses a status that doesn't match its outstanding heartbeat. ESP32 commit handling now requires the typed `TX_COMMITTED` event with exact transaction ID/amount fields. The equal 2.2 kΩ / 2.2 kΩ divider remains a physical risk: it produces roughly 2.5 V at ESP32 RX and is not a robust level-shifting design; a proper level shifter or correctly calculated divider is preferred.
 
 **Not yet proven:** the exact cause is not established from logs alone. UART timing and input signal margin are plausible contributors; only the next paired-board test can confirm whether this firmware and the actual electrical link are stable.
 
