@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('sentinelDesktop', {
   listSerialPorts: () => ipcRenderer.invoke('serial:list-ports'),
   connectBoard: request => ipcRenderer.invoke('serial:connect', request),
   disconnectBoard: device => ipcRenderer.invoke('serial:disconnect', device),
+  sendBoardCommand: request => ipcRenderer.invoke('serial:command', request),
   onSerialEvent: callback => {
     if (typeof callback !== 'function') throw new TypeError('Callback must be a function.');
     const listener = (_event, payload) => callback(payload);

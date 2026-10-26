@@ -100,10 +100,21 @@ ipcMain.handle('serial:connect', async (event, request) => {
   if (!request || !['uno', 'sentinel'].includes(request.device)) return { ok: false, error: 'Unknown board role.' };
   if (typeof request.path !== 'string' || request.path.length < 1 || request.path.length > 256) return { ok: false, error: 'Invalid serial path.' };
   const baudRate = Number(request.baudRate);
-  if (![9600, 115200].includes(baudRate)) return { ok: false, error: 'Unsupported baud rate.' };
+  if (baudRate !== 115200) return { ok: false, error: 'USB console ports must use 115200 baud; peer UART baud is configured in firmware.' };
   try {
     await serialManager.connect(request.device, request.path, baudRate);
     return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+ipcMain.handle('serial:command', async (event, request) => {
+  assertTrustedSender(event);
+  if (!request || !['uno', 'sentinel'].includes(request.device) || typeof request.command !== 'string') {
+    return { ok: false, error: 'Invalid board command request.' };
+  }
+  try {
+    return await serialManager.writeCommand(request.device, request.command);
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
