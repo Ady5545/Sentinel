@@ -33,7 +33,7 @@
 - [x] Add serial-manager tests for fragmented/concatenated lines, CRLF, overlong/malformed input, unplug, write failure, double-connect, role/port collisions, stale readiness, structured command validation and sensitive-data redaction.
 - [x] Keep the software-only simulation usable offline and separate from protected HIL; connection alone never grants readiness.
 
-**Quarter 2 exit gate:** The main-process bridge accepts only structured allowlisted commands; protected commands are blocked without fresh paired readiness; framing/session failures invalidate readiness; and sensitive command/serial text is redacted before renderer diagnostics. These automated checks and the renderer build passed in [run 40372389614](https://github.com/Ady5545/Sentinel/actions/runs/40372389614). Physical paired-board behavior remains separately NOT VERIFIED.
+**Quarter 2 exit gate:** The main-process bridge accepts only structured allowlisted commands; protected commands are blocked without fresh paired readiness; framing/session failures invalidate readiness; and sensitive command/serial text is redacted before renderer diagnostics. These automated checks and the renderer build passed on the corrected parser/test revision in [run 40372831708](https://github.com/Ady5545/Sentinel/actions/runs/40372831708). A source-to-firmware audit also corrected the guardian reconciliation marker to the actual ESP32 output, `[RECONCILE] Matching controller-reported virtual commit id=...;amount=...`. Physical paired-board behavior remains separately NOT VERIFIED.
 
 ## Quarter 3 — End-to-end HIL and research evidence (50–75%)
 
@@ -65,10 +65,10 @@
 | Commit delivery fault-model cases added | Implemented on this branch; CI pending | `.github/protocol-v3-model.node.mjs` — lost event, lost ACK, exact retry identity and retry exhaustion |
 | Firmware commit retry/ACK source contract | Added on this branch; CI pending | `.github/protocol-v3-handshake-contract.mjs` — bounded retries, identical sequence and idempotent ACK replay |
 | Vitest discovery issue | Fixed on this branch; CI pending | `package.json` now scopes Vitest to `src`, avoiding Node-test files under `.agent` being treated as Vitest suites |
-| Quarter 1 overall | **IN PROGRESS** | Remaining protocol delivery, fault-model and full test gates above |
-| Quarter 2 host bridge/readiness | Implemented on this branch; CI pending | `electron/serial-manager.cjs`, `electron/main.cjs`, `electron/preload.cjs`, `src/vite-env.d.ts`, `src/App.tsx` |
-| Quarter 2 test coverage | Implemented on this branch; CI pending | `electron/serial-manager.node-test.cjs`, `src/core/hil-evidence.test.ts` |
-| Quarter 2 overall | **IMPLEMENTED — automated CI PASS** | Desktop test/build workflow passed on implementation commit `36719db492c2d73551361871e37e6a5c403237b6` in [run 40372389614](https://github.com/Ady5545/Sentinel/actions/runs/40372389614). The final ledger-only update is rechecked by its own push workflow. |
+| Quarter 1 overall | **IN PROGRESS** | Remaining protocol delivery, fault-model and full test gates above; automated workflows passed on Q1 implementation commit `9cbebcdd41d00e33586706363876270d0b3ab3d7` in [desktop CI](https://github.com/Ady5545/Sentinel/actions/runs/40370144382) and [firmware CI](https://github.com/Ady5545/Sentinel/actions/runs/40370144343) |
+| Quarter 2 host bridge/readiness | **Implemented and automated CI passed** | `electron/serial-manager.cjs`, `electron/main.cjs`, `electron/preload.cjs`, `src/vite-env.d.ts`, `src/App.tsx`; includes parsing the current firmware `[RECONCILE]` output |
+| Quarter 2 test coverage | **Passed on corrected source/test revision** | `electron/serial-manager.node-test.cjs`, `src/core/hil-evidence.test.ts`; [latest workflow run 40372831708](https://github.com/Ady5545/Sentinel/actions/runs/40372831708) passed |
+| Quarter 2 overall | **IMPLEMENTED — automated CI PASS** | Corrected bridge, tests and parser/firmware-output alignment passed on `d22cfce9e5a8f6c39953b7b5c6744c38c9a36a12` in [run 40372831708](https://github.com/Ady5545/Sentinel/actions/runs/40372831708). The later plan-ledger-only commit triggers its own verification run. |
 | Physical UART qualification | **NOT VERIFIED** | Requires actual Uno + ESP32 paired logs; code changes cannot establish it |
 
 Quarter 1's open audit remains explicitly tracked and must not be represented as complete. No Quarter 3 work should begin until Quarter 2's exit gate is satisfied and reviewed.
