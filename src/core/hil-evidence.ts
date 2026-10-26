@@ -234,6 +234,26 @@ export function canBeginHilWithdrawal(current: HilTransaction | null): boolean {
   return current === null || current.phase === 'RECONCILED' || current.phase === 'DENIED';
 }
 
+export type HilBoardResetEpochs = { uno: number; sentinel: number };
+
+/**
+ * A mismatch/revocation cannot be cleared just because healthy status reappears.
+ * Both controllers must have emitted a new boot/session-start record after the
+ * fault was latched, then the host must observe the fresh paired-ready state.
+ */
+export function canClearHilFaultAfterPairedReset(
+  phase: HilTransactionPhase,
+  pairReady: boolean,
+  faultBaseline: HilBoardResetEpochs | null,
+  currentEpochs: HilBoardResetEpochs
+): boolean {
+  return (phase === 'MISMATCH' || phase === 'REVOKED') &&
+    pairReady &&
+    faultBaseline !== null &&
+    currentEpochs.uno > faultBaseline.uno &&
+    currentEpochs.sentinel > faultBaseline.sentinel;
+}
+
 export function redactSensitiveSerialText(line: string): string {
   return line
     .replace(/\bCHANGE_PIN\s+\d{4,6}\s+\d{4,6}\s+\d{4,6}\b/gi, 'CHANGE_PIN [REDACTED]')
