@@ -11,6 +11,7 @@ const requested: HilTransaction = {
   id: 'T0000007',
   amount: 500,
   phase: 'REQUESTED',
+  permitSeen: false,
   unoCommitSeen: false,
   guardianCommitSeen: false,
   message: 'Uno reported a pending fictional withdrawal.'
@@ -82,5 +83,63 @@ describe('HIL diagnostic text safety', () => {
       id: 'T0000007', amount: '500', balance: '49500'
     });
     expect(parseKeyValueText('no key value fields')).toEqual({});
+  });
+});
+
+
+describe('HIL desktop shadow dispenser gate', () => {
+  const commissioned = () => reduceHilShadowObservation(
+    reduceHilShadowObservation(initialHilShadowState(),
+      'ATM_EVENT|ACCOUNT_PROVISIONED|card=CARD01;balance=50000'),
+    'ATM_EVENT|CASH_CONFIGURED|currency=INR;notes500=20;notes200=20;notes100=20;notes50=20;total=17000'
+  );
+
+  it('commissions a shadow from board-reported counts and updates only after full reconciliation', () => {
+    let shadow = commissioned();
+    expect(shadow.status).toBe('COMMISSIONED');
+    expect(shadow.cassetteCash).toBe(17000);
+    expect(shadow.accountBalance).toBe(50000);
+
+    const tx: HilTransaction = {
+      id: 'T0000007', amount: 500, phase: 'RECONCILED', permitSeen: true,
+      unoCommitSeen: true, guardianCommitSeen: true, balance: 49500, message: 'matched'
+    };
+    shadow = reconcileHilShadowCommit(shadow, tx);
+    expect(shadow.accountBalance).toBe(49500);
+    expect(shadow.cassetteCash).toBe(16500);
+    expect(shadow.dispensedTotal).toBe(500);
+    expect(shadow.committedTransactionIds).toEqual(['T0000007']);
+
+    const duplicate = reconcileHilShadowCommit(shadow, tx);
+    expect(duplicate).toBe(shadow);
+    expect(duplicate.dispensedTotal).toBe(500);
+  });
+
+  it('does not change shadow money when a transaction is not fully reconciled', () => {
+    const shadow = commissioned();
+    const tx: HilTransaction = {
+      id: 'T0000007', amount: 500, phase: 'UNO COMMITTED', permitSeen: true,
+      unoCommitSeen: true, guardianCommitSeen: false, balance: 49500, message: 'awaiting guardian'
+    };
+    expect(reconcileHilShadowCommit(shadow, tx)).toBe(shadow);
+  });
+
+  it('marks an unexplained balance mismatch and leaves virtual inventory untouched', () => {
+    const shadow = commissioned();
+    const tx: HilTransaction = {
+      id: 'T0000007', amount: 500, phase: 'RECONCILED', permitSeen: true,
+      unoCommitSeen: true, guardianCommitSeen: true, balance: 123, message: 'matched'
+    };
+    const result = reconcileHilShadowCommit(shadow, tx);
+    expect(result.status).toBe('RECONCILIATION REQUIRED');
+    expect(result.accountBalance).toBe(50000);
+    expect(result.cassetteCash).toBe(17000);
+    expect(result.dispensedTotal).toBe(0);
+  });
+
+  it('denomination planner agrees with the 500/200/100/50 virtual cassette rules', () => {
+    expect(planHilNotes(750, { notes500: 1, notes200: 1, notes100: 0, notes50: 1 }))
+      .toEqual({ notes500: 1, notes200: 1, notes100: 0, notes50: 1 });
+    expect(planHilNotes(750, { notes500: 1, notes200: 0, notes100: 0, notes50: 0 })).toBeNull();
   });
 });
