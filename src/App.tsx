@@ -323,7 +323,6 @@ export default function App() {
         return;
       }
       dispatchResearch({ type: 'CLEAR_HIL_FAULT', at: Date.now() });
-      setHilTransactionStartedAt(undefined);
       setPortMessage('HIL fault cleared after the required paired reboot/readiness gate. The shadow is UNCOMMISSIONED until new board configuration reports arrive.');
       return;
     }
