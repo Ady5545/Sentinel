@@ -103,6 +103,10 @@ ipcMain.handle('serial:set-research-mode', (event, mode) => {
   assertTrustedSender(event);
   return serialManager.setResearchMode(mode);
 });
+ipcMain.handle('serial:clear-hil-fault', event => {
+  assertTrustedSender(event);
+  return serialManager.clearHilFault();
+});
 ipcMain.handle('serial:connect', async (event, request) => {
   assertTrustedSender(event);
   if (!request || !['uno', 'sentinel'].includes(request.device)) return { ok: false, error: 'Unknown board role.' };
