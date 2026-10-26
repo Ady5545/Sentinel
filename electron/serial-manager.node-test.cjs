@@ -237,3 +237,42 @@ test('PIN-bearing commands never place their values in command diagnostics', asy
   assert.equal(JSON.stringify(h.emitted).includes('4826'), false);
   assert.equal(pair.uno.writes[0], 'PIN 4826\n');
 });
+
+
+test('HIL-only setup and customer commands require explicit host mode plus fresh paired readiness', async () => {
+  const h = makeHarness();
+  const pair = await h.connectPair();
+  await h.markPairReady();
+
+  assert.equal(h.manager.getReadinessSnapshot().researchMode, 'SIMULATION');
+  await assert.rejects(
+    h.manager.writeCommand('uno', { name: 'ADD_ACCOUNT', args: ['CARD01', '4826', '50000'] }),
+    /explicit HIL mode/
+  );
+  await assert.rejects(
+    h.manager.writeCommand('uno', { name: 'WITHDRAW', args: ['500'] }),
+    /explicit HIL mode/
+  );
+
+  assert.deepEqual(h.manager.setResearchMode('HIL'), { ok: true, mode: 'HIL' });
+  assert.equal(h.manager.getReadinessSnapshot().researchMode, 'HIL');
+  await h.manager.writeCommand('uno', { name: 'ADD_ACCOUNT', args: ['CARD01', '4826', '50000'] });
+  await h.manager.writeCommand('uno', { name: 'SET_CASH', args: ['20', '20', '20', '20'] });
+  assert.deepEqual(pair.uno.writes.slice(0, 2), ['ADD_ACCOUNT CARD01 4826 50000\n', 'SET_CASH 20 20 20 20\n']);
+
+  await h.manager.setResearchMode('SIMULATION');
+  await assert.rejects(
+    h.manager.writeCommand('uno', { name: 'CARD', args: ['CARD01'] }),
+    /explicit HIL mode/
+  );
+});
+
+test('HIL-only commands still fail closed in HIL mode when the paired reports are stale', async () => {
+  const h = makeHarness();
+  await h.connectPair();
+  await h.manager.setResearchMode('HIL');
+  await assert.rejects(
+    h.manager.writeCommand('uno', { name: 'ADD_ACCOUNT', args: ['CARD01', '4826', '50000'] }),
+    /fresh HEALTHY\/OBSERVING/
+  );
+});
