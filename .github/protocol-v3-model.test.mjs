@@ -286,8 +286,10 @@ test("frame parser rejects missing newline, corrupted CRC, extra delimiters and 
 });
 
 test("payload schema rejects missing, duplicate, unknown, empty and malformed fields", () => {
-  assert.deepEqual(parseExactPayload("id=T0000001;amount=500", ["id", "amount"]).values,
-    { id: "T0000001", amount: "500" });
+  const parsed = parseExactPayload("id=T0000001;amount=500", ["id", "amount"]);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.values.id, "T0000001");
+  assert.equal(parsed.values.amount, "500");
   assert.equal(parseExactPayload("id=T1;id=T2;amount=500", ["id", "amount"]).error, "DUPLICATE_KEY");
   assert.equal(parseExactPayload("id=T1;amount=500;mode=FAST", ["id", "amount"]).error, "KEY_SET_MISMATCH");
   assert.equal(parseExactPayload("id=T1;amount=", ["id", "amount"]).error, "MALFORMED_PAIR");
