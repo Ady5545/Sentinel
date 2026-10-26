@@ -18,7 +18,8 @@ For now this data resides in RAM and disappears on reset. This is deliberate to 
 
 - PIN format validation (4–6 digits).
 - PIN comparison without printing the PIN or storing it in source constants.
-- Maximum of three failed attempts per configured demo card followed by a timed lockout.
+- Configurable failed-attempt threshold per demo card followed by a timed lockout.
+- Authenticated PIN change requires correct current PIN, valid new PIN and matching confirmation.
 - Guardian-wide rate observation of reported PIN failures.
 - PIN-entry timeout, authenticated-session inactivity timeout, explicit cancel/logout and guardian-loss lock.
 - Unknown card, malformed PIN and invalid state are logged as separate structured observations.
@@ -38,6 +39,8 @@ For now this data resides in RAM and disappears on reset. This is deliberate to 
 10. The desktop domain-owned dispenser gate separately verifies the current hardware observation and protected mode before mutating its own virtual account/cassette state.
 
 ## Required verification before calling v2 ready
+
+Include PIN change success, wrong current PIN, confirmation mismatch, and policy-boundary tests for every configurable timeout and counter.
 
 - Both CI compile jobs pass with warnings reviewed.
 - Two-board physical handshake and heartbeat work at the documented pins/baud.
