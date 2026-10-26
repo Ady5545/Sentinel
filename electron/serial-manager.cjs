@@ -187,6 +187,9 @@ class SerialManager extends EventEmitter {
     this.maxLineLength = options.maxLineLength || MAX_LINE_LENGTH;
     this.freshnessMs = options.freshnessMs || READINESS_TTL_MS;
     this.researchMode = 'SIMULATION';
+    this.boardBootEpochs = { uno: 0, sentinel: 0 };
+    this.hilFaultLatched = false;
+    this.faultResetBaseline = null;
     this.now = options.now || (() => Date.now());
     this.listPortsProvider = options.listPorts || (() => SerialPort.list());
     this.createPort = options.createPort || (config => new SerialPort(config));
@@ -240,12 +243,14 @@ class SerialManager extends EventEmitter {
         state.failed = true;
         state.phase = 'ERROR';
         state.readinessAt = 0;
+        this.latchHilFault('Serial port error; host HIL authority fault latched.');
         this.emit('event', { kind: 'error', code: 'PORT_ERROR', device, path: requestedPath, sessionId: state.sessionId, message: 'Serial port error; readiness is revoked until reconnect.' });
         if (!settled) failOpen(new Error('Serial port error.'));
         else void this.disconnect(device);
       });
       port.on('close', () => {
         if (state.closed) return;
+        this.latchHilFault('Board serial session closed; host HIL authority fault latched until paired reset.');
         state.closed = true;
         state.connected = false;
         state.phase = 'DISCONNECTED';
@@ -266,9 +271,38 @@ class SerialManager extends EventEmitter {
 
   setResearchMode(mode) {
     if (mode !== 'SIMULATION' && mode !== 'HIL') return { ok: false, error: 'Unknown research mode.' };
+    if (mode === 'HIL' && this.hilFaultLatched) {
+      return { ok: false, error: 'HIL mode is blocked by a latched host fault. Reboot both boards after the fault, re-establish fresh paired readiness, and explicitly clear the fault first.' };
+    }
     this.researchMode = mode;
     this.emit('event', { kind: 'research-mode', mode, message: mode === 'HIL' ? 'Hardware-in-the-loop commands enabled subject to paired readiness.' : 'Software-only simulation mode; HIL-only board commands are disabled.' });
     return { ok: true, mode };
+  }
+
+  canClearHilFault() {
+    const baseline = this.faultResetBaseline;
+    return this.hilFaultLatched && baseline !== null &&
+      this.boardBootEpochs.uno > baseline.uno &&
+      this.boardBootEpochs.sentinel > baseline.sentinel &&
+      this.isPairReady();
+  }
+
+  clearHilFault() {
+    if (!this.canClearHilFault()) {
+      return { ok: false, error: 'Fault remains latched until both boards reboot after the fault and fresh paired readiness is observed.' };
+    }
+    this.hilFaultLatched = false;
+    this.faultResetBaseline = null;
+    this.emit('event', { kind: 'fault-cleared', code: 'HIL_FAULT_CLEARED', message: 'Host HIL fault cleared after paired reboot/readiness qualification.' });
+    return { ok: true };
+  }
+
+  latchHilFault(reason) {
+    if (!this.hilFaultLatched) {
+      this.hilFaultLatched = true;
+      this.faultResetBaseline = { ...this.boardBootEpochs };
+      this.emit('event', { kind: 'fault-latched', code: 'HIL_FAULT_LATCHED', message: reason || 'HIL authority fault latched.' });
+    }
   }
 
   getReadinessSnapshot() {
@@ -301,7 +335,9 @@ class SerialManager extends EventEmitter {
       uno.readinessAt > 0 && sentinel.readinessAt > 0 &&
       this.now() - uno.readinessAt <= this.freshnessMs &&
       this.now() - sentinel.readinessAt <= this.freshnessMs;
-    return { pairReady, freshnessMs: this.freshnessMs, researchMode: this.researchMode, boards };
+    return { pairReady, freshnessMs: this.freshnessMs, researchMode: this.researchMode, boards,
+      hilFaultLatched: this.hilFaultLatched, faultResetBaseline: this.faultResetBaseline,
+      boardBootEpochs: { ...this.boardBootEpochs }, canClearHilFault: this.canClearHilFault() };
   }
 
   isPairReady() {
@@ -317,6 +353,9 @@ class SerialManager extends EventEmitter {
     }
     if (HIL_ONLY_COMMANDS.has(validation.commandName) && this.researchMode !== 'HIL') {
       throw new Error('HIL-only command denied: switch the desktop to explicit HIL mode first.');
+    }
+    if (HIL_ONLY_COMMANDS.has(validation.commandName) && this.hilFaultLatched) {
+      throw new Error('HIL-only command denied: the host fault latch requires paired reboot and explicit clearance.');
     }
     if (PROTECTED_PAIR_COMMANDS.has(validation.commandName) && !this.isPairReady()) {
       throw new Error('Protected command denied: both board roles must have fresh HEALTHY/OBSERVING reports. Connection alone is not readiness.');
@@ -338,6 +377,7 @@ class SerialManager extends EventEmitter {
       state.failed = true;
       state.phase = 'ERROR';
       state.readinessAt = 0;
+      this.latchHilFault('Serial write failed; host HIL authority fault latched.');
       this.emit('event', { kind: 'error', code: 'WRITE_FAILED', device, path: state.path, sessionId: state.sessionId, message: 'Serial write failed; board readiness invalidated.' });
       void this.disconnect(device);
       throw new Error('Serial write failed; reconnect and re-establish both board readiness reports.');
@@ -358,6 +398,7 @@ class SerialManager extends EventEmitter {
     state.readinessAt = 0;
     state.buffer = '';
     state.droppingLongLine = false;
+    this.latchHilFault(message + ' HIL authority fault latched.');
     this.emit('event', { kind: 'error', code, device: state.device, path: state.path, sessionId: state.sessionId, message });
     // Ambiguous framing revokes readiness and releases the port for a clean reconnect.
     void this.disconnect(state.device);
@@ -408,6 +449,12 @@ class SerialManager extends EventEmitter {
     const at = this.now();
     const parsed = parseBoardLine(state.device, rawLine);
     state.lastLineAt = at;
+    if (parsed.type === 'BOARD_BOOT') {
+      const previousEpoch = this.boardBootEpochs[state.device];
+      this.boardBootEpochs = { ...this.boardBootEpochs, [state.device]: previousEpoch + 1 };
+      if (previousEpoch > 0) this.latchHilFault('A board reboot was observed after the initial startup; host HIL authority fault latched.');
+    }
+    if (parsed.type === 'AUTHORITY_REVOKED') this.latchHilFault('Board-reported guardian revocation; host HIL authority fault latched.');
     if (parsed.phase) {
       state.phase = parsed.phase;
       if (parsed.phase === 'HEALTHY' || parsed.phase === 'OBSERVING') state.readinessAt = at;
