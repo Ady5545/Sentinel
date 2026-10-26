@@ -19,6 +19,14 @@ import {
 
 type View = 'terminal' | 'machine' | 'sentinel' | 'experiments' | 'journal' | 'hardware';
 type DeviceKey = 'uno' | 'sentinel';
+type UnoOperatorCommand =
+  | { name: 'ADD_ACCOUNT'; args: [string, string, string] }
+  | { name: 'SET_CASH'; args: [string, string, string, string] }
+  | { name: 'CARD'; args: [string] }
+  | { name: 'PIN'; args: [string] }
+  | { name: 'BALANCE'; args: [] }
+  | { name: 'WITHDRAW'; args: [string] }
+  | { name: 'FIXTURE_MISMATCH'; args: [] };
 type Port = { path: string; manufacturer?: string; vendorId?: string; productId?: string; serialNumber?: string };
 type BoardPhase = 'DISCONNECTED' | 'USB OPEN' | 'BOOTED' | 'NEGOTIATING' | 'HEALTHY' | 'OBSERVING' | 'STALE' | 'REVOKED' | 'ERROR';
 type BoardState = { connected: boolean; path: string; lastLine: string; lastLineAt: number; readinessAt: number; sessionId?: string; phase: BoardPhase; error?: string };
@@ -354,16 +362,19 @@ export default function App() {
     await window.sentinelDesktop.disconnectBoard(device);
     setBoards(previous => ({ ...previous, [device]: { ...previous[device], connected: false, path: '', sessionId: undefined, lastLineAt: 0, readinessAt: 0, phase: 'DISCONNECTED' } }));
   };
-  const sendBoardCommand = async (device: DeviceKey, command: string) => {
+  const sendTypedBoardCommand = async (device: DeviceKey, command: { name: string; args: string[] }) => {
     if (!window.sentinelDesktop) return { ok: false, error: 'Board commands require the installed desktop application.' };
-    const parts = command.split(' ');
-    const [name, ...args] = parts;
-    if (!name || parts.some(part => !part)) return { ok: false, error: 'Use a command name followed by single-space-separated arguments.' };
-    const response = await window.sentinelDesktop.sendBoardCommand({ device, command: { name, args } });
+    const response = await window.sentinelDesktop.sendBoardCommand({ device, command });
     setPortMessage(response.ok
       ? (response.commandName || 'Command') + ' bytes were written to ' + device.toUpperCase() + '; this is not confirmation the board accepted the command.'
       : response.error || 'Board command write failed.');
     return response;
+  };
+  const sendBoardCommand = async (device: DeviceKey, command: string) => {
+    const parts = command.split(' ');
+    const [name, ...args] = parts;
+    if (!name || parts.some(part => !part)) return { ok: false, error: 'Use a command name followed by single-space-separated arguments.' };
+    return sendTypedBoardCommand(device, { name, args });
   };
 
   return <div className="sentinel-os">
@@ -403,7 +414,7 @@ export default function App() {
         {view === 'sentinel' && <SentinelView state={state} boards={boards} />}
         {view === 'experiments' && <><ExperimentView state={state} dispatch={dispatch} /><ResearchRunPanel run={researchRun} scenarioRuns={scenarioRuns} onReplay={replayScenario} /></>}
         {view === 'journal' && <JournalView events={combinedJournalEvents} alerts={alerts} onExport={exportEvidence} researchRun={researchRun} />}
-        {view === 'hardware' && <HardwareView ports={ports} chosenPort={chosenPort} setChosenPort={setChosenPort} boards={boards} message={portMessage} serialEvents={serialEvents} refresh={refreshPorts} connect={connectBoard} disconnect={disconnectBoard} sendCommand={sendBoardCommand} hilTransaction={hilTransaction} boardBootEpochs={boardBootEpochs} hilFaultResetBaseline={hilFaultResetBaseline} nowMs={nowMs} clearHilTransaction={() => { setHilTransaction(null); setHilTransactionStartedAt(null); setHilFaultResetBaseline(null); }} />}
+        {view === 'hardware' && <HardwareView ports={ports} chosenPort={chosenPort} setChosenPort={setChosenPort} boards={boards} message={portMessage} serialEvents={serialEvents} refresh={refreshPorts} connect={connectBoard} disconnect={disconnectBoard} sendCommand={sendBoardCommand} sendTypedCommand={(command) => sendTypedBoardCommand('uno', command)} researchMode={researchRun.mode} researchPhase={researchRun.phase} hilTransaction={hilTransaction} boardBootEpochs={boardBootEpochs} hilFaultResetBaseline={hilFaultResetBaseline} nowMs={nowMs} clearHilTransaction={() => { setHilTransaction(null); setHilTransactionStartedAt(null); setHilFaultResetBaseline(null); }} />}
         <footer className="status-footer"><span><i /> DOMAIN CORE ACTIVE</span><span>{eventCount.toString().padStart(3,'0')} EVENTS · {alerts.toString().padStart(2,'0')} ALERTS</span><span>FICTIONAL ACCOUNT · VIRTUAL CASH · RESEARCH PROTOTYPE</span></footer>
       </div>
     </main>
@@ -574,14 +585,16 @@ function JournalRow({ event }: { event: JournalEvent }) {
   return <article className={'journal-row severity-' + event.severity}><div className="journal-icon">{icon}</div><time>{event.at}</time><div className="journal-copy"><strong>{event.title}</strong><p>{event.detail}</p><small>{event.source} · {event.id}</small></div><span className="severity-tag">{event.severity.toUpperCase()}</span></article>;
 }
 
-function HILOperatorControls({ pairReady, unoConnected, sendCommand, hilTransaction }: {
+function HILOperatorControls({ pairReady, unoConnected, sendCommand, researchMode, researchPhase, hilTransaction }: {
   pairReady: boolean;
   unoConnected: boolean;
-  sendCommand: (device: DeviceKey, command: string) => Promise<{ ok: boolean; error?: string; commandName?: string; sensitive?: boolean }>;
+  sendCommand: (command: UnoOperatorCommand) => Promise<{ ok: boolean; error?: string; commandName?: string; sensitive?: boolean }>;
+  researchMode: ResearchRunRecord['mode'];
+  researchPhase: ResearchRunRecord['phase'];
   hilTransaction: HilTransaction | null;
 }) {
-  const customerOpsAllowed = pairReady && canBeginHilWithdrawal(hilTransaction);
-  const canConfigure = unoConnected && canBeginHilWithdrawal(hilTransaction);
+  const customerOpsAllowed = pairReady && researchMode === 'HIL' && researchPhase === 'ACTIVE' && canBeginHilWithdrawal(hilTransaction);
+  const canConfigure = pairReady && researchMode === 'HIL' && researchPhase === 'ACTIVE' && unoConnected && canBeginHilWithdrawal(hilTransaction);
   const [cardId, setCardId] = useState('CARD01');
   const [demoPin, setDemoPin] = useState('');
   const [startingBalance, setStartingBalance] = useState('50000');
@@ -593,10 +606,10 @@ function HILOperatorControls({ pairReady, unoConnected, sendCommand, hilTransact
   const [customerPin, setCustomerPin] = useState('');
   const [feedback, setFeedback] = useState('');
   const [busy, setBusy] = useState(false);
-  const send = async (device: DeviceKey, command: string) => {
+  const send = async (command: UnoOperatorCommand) => {
     setBusy(true);
     try {
-      const result = await sendCommand(device, command);
+      const result = await sendCommand(command);
       setFeedback(result.ok ? (result.commandName || 'Command') + ' written; verify the board-reported response below.' : result.error || 'Command failed.');
       return result.ok;
     } catch (error) {
@@ -615,7 +628,7 @@ function HILOperatorControls({ pairReady, unoConnected, sendCommand, hilTransact
     }
     const pin = demoPin;
     setDemoPin('');
-    const ok = await send('uno', 'ADD_ACCOUNT ' + cardId + ' ' + pin + ' ' + startingBalance);
+    const ok = await send({ name: 'ADD_ACCOUNT', args: [cardId, pin, startingBalance] });
     if (ok) setFeedback('Account provisioning command written. Confirm ATM_EVENT|ACCOUNT_PROVISIONED before proceeding.');
   };
   const configureCash = async () => {
@@ -624,18 +637,18 @@ function HILOperatorControls({ pairReady, unoConnected, sendCommand, hilTransact
       setFeedback('Each fictional note count must be an integer from 0 to 9999.');
       return;
     }
-    await send('uno', 'SET_CASH ' + values.join(' '));
+    await send({ name: 'SET_CASH', args: [cash500, cash200, cash100, cash50] });
   };
   const useCard = async () => {
     if (!customerOpsAllowed) { setFeedback('Blocked: the pair is not fresh/ready or a previous HIL withdrawal is still unresolved.'); return; }
-    await send('uno', 'CARD ' + cardId);
+    await send({ name: 'CARD', args: [cardId] });
   };
   const submitPin = async () => {
     if (!/^[0-9]{4,6}$/.test(customerPin)) { setFeedback('Enter the fictional demo PIN used when provisioning.'); setCustomerPin(''); return; }
     const pin = customerPin;
     setCustomerPin('');
     if (!customerOpsAllowed) { setFeedback('Blocked: the pair is not fresh/ready or a previous HIL withdrawal is still unresolved.'); return; }
-    await send('uno', 'PIN ' + pin);
+    await send({ name: 'PIN', args: [pin] });
   };
   const withdraw = async () => {
     if (!/^[1-9][0-9]*$/.test(withdrawAmount) || Number(withdrawAmount) > 1000000 || Number(withdrawAmount) % 50 !== 0) {
@@ -643,7 +656,7 @@ function HILOperatorControls({ pairReady, unoConnected, sendCommand, hilTransact
       return;
     }
     if (!customerOpsAllowed) { setFeedback('Blocked: the pair is not fresh/ready or a previous HIL withdrawal is still unresolved.'); return; }
-    await send('uno', 'WITHDRAW ' + withdrawAmount);
+    await send({ name: 'WITHDRAW', args: [withdrawAmount] });
   };
   return <>
     <div className="hil-setup-grid">
@@ -667,21 +680,24 @@ function HILOperatorControls({ pairReady, unoConnected, sendCommand, hilTransact
     <div className="hil-action-row">
       <button className="board-button" onClick={() => void useCard()} disabled={!customerOpsAllowed || busy}>Insert demo card</button>
       <button className="board-button" onClick={() => void submitPin()} disabled={!customerOpsAllowed || busy || !customerPin}>Verify PIN</button>
-      <button className="board-button" onClick={() => void send('uno', 'BALANCE')} disabled={!customerOpsAllowed || busy}>Check balance</button>
+      <button className="board-button" onClick={() => void send({ name: 'BALANCE', args: [] })} disabled={!customerOpsAllowed || busy}>Check balance</button>
       <button className="board-button" onClick={() => void withdraw()} disabled={!customerOpsAllowed || busy}>Request withdrawal</button>
-      <button className="board-button danger-command" onClick={() => void send('uno', 'FIXTURE_MISMATCH')} disabled={!customerOpsAllowed || busy}>Inject synthetic mismatch</button>
+      <button className="board-button danger-command" onClick={() => void send({ name: 'FIXTURE_MISMATCH', args: [] })} disabled={!customerOpsAllowed || busy}>Inject synthetic mismatch</button>
     </div>
     {feedback && <div className="hardware-notice"><CircleAlert size={16} /><p>{feedback}</p></div>}
     <p className="muted-note">All values are fictional and RAM-only on the boards. Provisioning does not mean the board accepted it until a corresponding ATM_EVENT appears. PIN fields are cleared after use and are not copied into the serial event journal.</p>
   </>;
 }
 
-function HardwareView({ ports, chosenPort, setChosenPort, boards, message, serialEvents, refresh, connect, disconnect, sendCommand, hilTransaction, boardBootEpochs, hilFaultResetBaseline, nowMs, clearHilTransaction }: {
+function HardwareView({ ports, chosenPort, setChosenPort, boards, message, serialEvents, refresh, connect, disconnect, sendCommand, sendTypedCommand, researchMode, researchPhase, hilTransaction, boardBootEpochs, hilFaultResetBaseline, nowMs, clearHilTransaction }: {
   ports: Port[]; chosenPort: Record<DeviceKey, string>;
   setChosenPort: Dispatch<SetStateAction<Record<DeviceKey, string>>>;
   boards: Record<DeviceKey, BoardState>; message: string; serialEvents: string[];
   refresh: () => void; connect: (device: DeviceKey) => void; disconnect: (device: DeviceKey) => void;
   sendCommand: (device: DeviceKey, command: string) => Promise<{ ok: boolean; error?: string; commandName?: string; sensitive?: boolean }>;
+  sendTypedCommand: (command: UnoOperatorCommand) => Promise<{ ok: boolean; error?: string; commandName?: string; sensitive?: boolean }>;
+  researchMode: ResearchRunRecord['mode'];
+  researchPhase: ResearchRunRecord['phase'];
   hilTransaction: HilTransaction | null;
   boardBootEpochs: HilBoardResetEpochs;
   hilFaultResetBaseline: HilBoardResetEpochs | null;
@@ -765,7 +781,7 @@ function HardwareView({ ports, chosenPort, setChosenPort, boards, message, seria
     <section className="data-panel hil-operator-panel">
       <PanelTitle icon={<Cpu size={16} />} title="UNO / SENTINEL OPERATOR WORKFLOW" suffix="FICTIONAL DEMO ONLY" />
       <p className="muted-note">This panel sends allowlisted commands to the connected boards. It does not drive physical cash hardware. A local USB write is not proof the board accepted a command.</p>
-      <HILOperatorControls pairReady={pairReady} unoConnected={boards.uno.connected} sendCommand={sendCommand} hilTransaction={hilTransaction} />
+      <HILOperatorControls pairReady={pairReady} unoConnected={boards.uno.connected} sendCommand={sendTypedCommand} researchMode={researchMode} researchPhase={researchPhase} hilTransaction={hilTransaction} />
     </section>
     <section className="data-panel hil-transaction-panel">
       <PanelTitle icon={<Activity size={16} />} title="HIL TRANSACTION CORRELATION" suffix="BOARD-REPORTED / PROTOCOL-EVIDENCE" />
