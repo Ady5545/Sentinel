@@ -73,7 +73,7 @@ export function parseKeyValueText(value: string): Record<string, string> {
     if (index < 1 || index === part.length - 1 || part.indexOf('=', index + 1) !== -1) return {};
     const key = part.slice(0, index);
     const fieldValue = part.slice(index + 1);
-    if (!/^[a-z_]+$/i.test(key) || !/^[A-Za-z0-9_.,:-]+$/.test(fieldValue) || Object.prototype.hasOwnProperty.call(fields, key)) return {};
+    if (!/^[a-z_][a-z0-9_]*$/i.test(key) || !/^[A-Za-z0-9_.,:-]+$/.test(fieldValue) || Object.prototype.hasOwnProperty.call(fields, key)) return {};
     fields[key] = fieldValue;
   }
   return fields;
