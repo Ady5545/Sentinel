@@ -273,6 +273,11 @@ int8_t freeAccountSlot() {
   return -1;
 }
 
+bool hasConfiguredAccount() {
+  for (uint8_t i = 0; i < MAX_ACCOUNTS; ++i) if (accounts[i].used) return true;
+  return false;
+}
+
 bool guardianFresh() {
   return handshakeComplete && !guardianRevokeLatched &&
          guardianLink == LINK_OBSERVING &&
@@ -304,7 +309,7 @@ void resetCustomerSession() {
   txPendingAmount = 0;
   memset(txPendingPlan, 0, sizeof(txPendingPlan));
   if (guardianRevokeLatched) setAtmState(ATM_GUARDIAN_LOCKED);
-  else setAtmState(freeAccountSlot() >= 0 ? ATM_IDLE : ATM_UNCOMMISSIONED);
+  else setAtmState(hasConfiguredAccount() ? ATM_IDLE : ATM_UNCOMMISSIONED);
 }
 
 void enterGuardianLock(const char *reason) {
@@ -906,7 +911,7 @@ void loop() {
         accounts[i].failedPins = 0;
         accounts[i].lockoutUntil = 0;
       }
-      setAtmState(freeAccountSlot() >= 0 ? ATM_IDLE : ATM_UNCOMMISSIONED);
+      setAtmState(hasConfiguredAccount() ? ATM_IDLE : ATM_UNCOMMISSIONED);
       emitEvent("LOCKOUT_EXPIRED", "reason=timed_lockout_completed");
     }
   }
