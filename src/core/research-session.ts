@@ -69,7 +69,7 @@ function safeDetail(detail: string): string {
     .replace(/\bCHANGE_PIN\s+\d{4,6}\s+\d{4,6}\s+\d{4,6}\b/gi, 'CHANGE_PIN [REDACTED]')
     .replace(/\bADD_ACCOUNT\s+\S+\s+\d{4,6}\s+\S+\b/gi, 'ADD_ACCOUNT [REDACTED]')
     .replace(/\bPIN\s+\d{4,6}\b/gi, 'PIN [REDACTED]')
-    .replace(/\b(?:customerPin|pinEntry|demoPin)\s*[:=]\s*\d{4,6}\b/gi, '$1=[REDACTED]');
+    .replace(/\b(customerPin|pinEntry|demoPin)\s*[:=]\s*\d{4,6}\b/gi, '$1=[REDACTED]');
 }
 
 function appendEvent(
