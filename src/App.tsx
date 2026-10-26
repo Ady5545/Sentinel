@@ -1,6 +1,6 @@
 import { useEffect, useReducer, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import {
-  Activity, ArrowRight, Banknote, CheckCircle2, ChevronRight, CircleAlert, Cpu,
+  Activity, ArrowRight, Banknote, BookOpen, CheckCircle2, ChevronRight, CircleAlert, Cpu,
   FileText, Fingerprint, Landmark, LockKeyhole, Monitor, Plug, RotateCcw,
   ShieldAlert, ShieldCheck, Terminal, WalletCards, XOctagon
 } from 'lucide-react';
@@ -455,7 +455,7 @@ export default function App() {
         </div>
       </header>
       <div className="page-body">
-        {view === 'terminal' && <TerminalView state={state} dispatch={dispatch} onRunSecurityDemo={runGuidedSecurityDemo} />}
+        {view === 'terminal' && <TerminalView state={state} dispatch={dispatch} onRunSecurityDemo={runGuidedSecurityDemo} onNavigate={navigateTo} />}
         {view === 'machine' && <MachineView state={state} boards={boards} />}
         {view === 'sentinel' && <SentinelView state={state} boards={boards} />}
         {view === 'experiments' && <>{securityRunPhase !== 'idle' && <GuidedRunProgress phase={securityRunPhase} onReplay={runGuidedSecurityDemo} />}<ExperimentView state={state} dispatch={dispatch} /><ResearchRunPanel run={researchRun} scenarioRuns={scenarioRuns} onReplay={replayScenario} /></>}
@@ -500,8 +500,9 @@ function GuidedRunProgress({ phase, onReplay }: { phase: 'initializing' | 'inspe
   </section>;
 }
 
-function TerminalView({ state, dispatch, onRunSecurityDemo }: { state: AtmState; dispatch: Dispatch<AtmAction>; onRunSecurityDemo: () => void }) {
+function TerminalView({ state, dispatch, onRunSecurityDemo, onNavigate }: { state: AtmState; dispatch: Dispatch<AtmAction>; onRunSecurityDemo: () => void; onNavigate: (view: View) => void }) {
   const [pinEntry, setPinEntry] = useState('');
+  const [helpOpen, setHelpOpen] = useState(true);
   useEffect(() => {
     if (state.screen !== 'pin') setPinEntry('');
   }, [state.screen]);
@@ -525,6 +526,18 @@ function TerminalView({ state, dispatch, onRunSecurityDemo }: { state: AtmState;
         </div>
         <button className="presentation-launch" onClick={onRunSecurityDemo}><span className="presentation-launch-icon"><ShieldCheck size={19} /></span><span><strong>Run security sequence</strong><small>Open the live result view</small></span><ArrowRight size={17} /></button>
       </div>
+    </section>
+    <section className="quick-start-panel" aria-label="How to use SENTINEL">
+      <button className="quick-start-toggle" aria-expanded={helpOpen} onClick={() => setHelpOpen(value => !value)}>
+        <span className="quick-start-book"><BookOpen size={17} /></span>
+        <span className="quick-start-toggle-copy"><strong>New here? Start with this 30-second guide.</strong><small>Know what to click and what each workspace is for.</small></span>
+        <span className="quick-start-toggle-action">{helpOpen ? 'HIDE GUIDE' : 'SHOW GUIDE'} <ChevronRight size={14} className={helpOpen ? 'guide-chevron open' : 'guide-chevron'} /></span>
+      </button>
+      {helpOpen && <div className="quick-start-content">
+        <div className="quick-start-step"><span>1</span><div><strong>Run the guided security sequence</strong><p>Best first step. Watch the staged incident, then read the outcome in the Experiment Lab.</p><button onClick={onRunSecurityDemo}>Start guided run <ArrowRight size={13} /></button></div></div>
+        <div className="quick-start-step"><span>2</span><div><strong>Explore the three useful workspaces</strong><p><b>ATM terminal</b> is the customer screen. <b>SENTINEL monitor</b> shows security state. <b>Event journal</b> shows recorded evidence.</p><div className="quick-start-links"><button onClick={() => onNavigate('terminal')}>ATM terminal</button><button onClick={() => onNavigate('sentinel')}>SENTINEL monitor</button><button onClick={() => onNavigate('journal')}>Event journal</button></div></div></div>
+        <div className="quick-start-step"><span>3</span><div><strong>Only connect hardware when you mean to</strong><p>The Hardware workspace is optional. You can learn and run the software scenario without connecting either board. Hardware results are separate from simulator results.</p><button className="quick-start-secondary" onClick={() => onNavigate('hardware')}>Open hardware workspace <ArrowRight size={13} /></button></div></div>
+      </div>}
     </section>
     <div className="terminal-layout">
       <section className="terminal-hardware">
