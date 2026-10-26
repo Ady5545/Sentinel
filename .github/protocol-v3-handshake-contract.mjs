@@ -71,6 +71,6 @@ test("Uno serializes heartbeat/status traffic for SoftwareSerial", () => {
   assert.ok(statusBranch >= 0, "Uno must have a STATUS receive branch");
   assert.match(uno.slice(statusBranch, statusBranch + 420), /awaitingGuardianStatus\s*=\s*false\s*;/);
   assert.match(esp, /if\s*\(!revokeLatched\)\s*sendFrame\("STATUS",\s*"HEALTHY"\);/);
-  assert.match(protocol, /at most one outstanding HEARTBEAT/i);
-  assert.match(protocol, /waits for STATUS before sending the next heartbeat/i);
+  assert.match(protocol, /at most one[\\s\\S]{0,80}HEARTBEAT/i);
+  assert.match(protocol, /clears the outstanding-heartbeat flag only after receiving and validating that STATUS/i);
 });
