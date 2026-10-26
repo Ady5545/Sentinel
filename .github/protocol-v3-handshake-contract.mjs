@@ -115,10 +115,25 @@ test("ESP32 flushes completed STATUS bytes locally without claiming peer accepta
   assert.ok(esp.includes("peer acceptance still unconfirmed"));
 });
 
-test("guardian commit-reconciliation log includes the exact matched transaction ID and amount", () => {
+test("guardian commit-reconciliation log includes the exact validated transaction ID and amount", () => {
   assert.ok(esp.includes('[RECONCILE] Matching controller-reported virtual commit id='));
-  assert.ok(esp.includes('Serial.print(pendingPermitId);'));
-  assert.ok(esp.includes('Serial.println(pendingPermitAmount);'));
+  assert.ok(esp.includes('Serial.print(id);'));
+  assert.ok(esp.includes('Serial.println(amount);'));
+  assert.ok(esp.includes('amount != pendingPermitAmount'));
+  assert.ok(esp.includes('strcmp(id, pendingPermitId) != 0'));
+});
+
+test("TX_COMMITTED delivery retries preserve the original frame and duplicate reports replay ACK idempotently", () => {
+  assert.ok(uno.includes("txCommitAttempts >= COMMIT_REPORT_MAX_ATTEMPTS"));
+  assert.ok(uno.includes("sendFrameAtSequence(F(\"EVENT\"), commitPayload, txCommitEventSequence)"));
+  assert.ok(uno.includes("Retrying identical EVENT sequence="));
+  const duplicateStart = esp.indexOf('if (strcmp(type, "EVENT") == 0 && lastCommittedEventSequence != 0');
+  assert.notEqual(duplicateStart, -1);
+  const duplicateEnd = esp.indexOf("\n  }", duplicateStart);
+  assert.notEqual(duplicateEnd, -1);
+  const duplicateBranch = esp.slice(duplicateStart, duplicateEnd);
+  assert.ok(duplicateBranch.includes('sendFrameAtSequence("ACK", lastCommitAckPayload, lastCommitAckSequence)'));
+  assert.ok(!duplicateBranch.includes("++committedTransactions"));
 });
 
 test("Uno reports exact virtual cassette counts and total for the desktop shadow", () => {

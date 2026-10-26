@@ -258,6 +258,83 @@ class TransactionGate {
   }
 }
 
+class ReliableCommitExchange {
+  constructor({ id = "T1", amount = 500, maxAttempts = 3 } = {}) {
+    this.id = id;
+    this.amount = amount;
+    this.maxAttempts = maxAttempts;
+    this.event = encodeFrame({
+      type: "EVENT", session: "U0000003C", seq: 4,
+      payload: `event=TX_COMMITTED;id=${id};amount=${amount}`
+    });
+    this.ack = encodeFrame({
+      type: "ACK", session: "U0000003C", seq: 7,
+      payload: `ack_seq=4;id=${id};amount=${amount}`
+    });
+    this.controllerBalance = 25000;
+    this.controllerCassette = 50000;
+    this.controllerCommitCount = 0;
+    this.guardianCommitCount = 0;
+    this.attempts = 0;
+    this.awaitingAck = false;
+    this.faulted = false;
+    this.lastAcceptedEvent = null;
+    this.ackReady = false;
+  }
+
+  controllerCommit() {
+    if (this.controllerCommitCount !== 0 || this.faulted) {
+      this.faulted = true;
+      return { ok: false, reason: "DUPLICATE_CONTROLLER_MUTATION" };
+    }
+    this.controllerBalance -= this.amount;
+    this.controllerCassette -= this.amount;
+    this.controllerCommitCount = 1;
+    this.awaitingAck = true;
+    this.attempts = 1;
+    return { ok: true, frame: this.event, attempt: this.attempts };
+  }
+
+  retryReport() {
+    if (!this.awaitingAck || this.faulted) return { ok: false, reason: "NOT_AWAITING_ACK" };
+    if (this.attempts >= this.maxAttempts) {
+      this.awaitingAck = false;
+      this.faulted = true;
+      return { ok: false, reason: "RETRY_EXHAUSTED" };
+    }
+    this.attempts += 1;
+    return { ok: true, frame: this.event, attempt: this.attempts };
+  }
+
+  guardianReceiveEvent(frame) {
+    const decoded = decodeFrame(frame);
+    if (!decoded.ok || decoded.frame.type !== "EVENT") return { ok: false, reason: "INVALID_EVENT" };
+    if (this.lastAcceptedEvent === frame) {
+      this.ackReady = true;
+      return { ok: true, duplicate: true, ack: this.ack, counted: false };
+    }
+    if (this.lastAcceptedEvent !== null) return { ok: false, reason: "CONFLICTING_COMMIT" };
+    const expectedPayload = `event=TX_COMMITTED;id=${this.id};amount=${this.amount}`;
+    if (decoded.frame.payload !== expectedPayload) return { ok: false, reason: "COMMIT_MISMATCH" };
+    this.lastAcceptedEvent = frame;
+    this.guardianCommitCount = 1;
+    this.ackReady = true;
+    return { ok: true, duplicate: false, ack: this.ack, counted: true };
+  }
+
+  controllerReceiveAck(frame) {
+    const decoded = decodeFrame(frame);
+    const expected = `ack_seq=4;id=${this.id};amount=${this.amount}`;
+    if (!this.awaitingAck || !decoded.ok || decoded.frame.type !== "ACK" ||
+        decoded.frame.payload !== expected || decoded.frame.seq !== 7) {
+      this.faulted = true;
+      return { ok: false, reason: "ACK_MISMATCH" };
+    }
+    this.awaitingAck = false;
+    return { ok: true, reconciled: true };
+  }
+}
+
 function elapsedMs(now, then) {
   return (now - then) >>> 0;
 }
@@ -432,6 +509,55 @@ test("unsafe new transaction while one permit is pending revokes the model", () 
   assert.equal(gate.revoked, true);
   assert.equal(gate.balance, 25000);
   assert.equal(gate.releasedTotal, 0);
+});
+
+test("lost TX_COMMITTED event retries the identical frame and mutates controller state once", () => {
+  const exchange = new ReliableCommitExchange({ id: "T1", amount: 500 });
+  const first = exchange.controllerCommit();
+  assert.equal(first.ok, true);
+  assert.equal(exchange.controllerBalance, 24500);
+  assert.equal(exchange.controllerCassette, 49500);
+  assert.equal(exchange.controllerCommitCount, 1);
+
+  // First event is dropped; the bounded retry must reuse the exact encoded frame.
+  const retry = exchange.retryReport();
+  assert.equal(retry.frame, first.frame);
+  assert.equal(retry.attempt, 2);
+  const accepted = exchange.guardianReceiveEvent(retry.frame);
+  assert.equal(accepted.ok, true);
+  assert.equal(accepted.counted, true);
+  assert.equal(exchange.guardianCommitCount, 1);
+  assert.equal(exchange.controllerCommitCount, 1);
+});
+
+test("lost commit ACK makes the guardian replay the same ACK without recounting the commit", () => {
+  const exchange = new ReliableCommitExchange({ id: "T2", amount: 1000 });
+  const first = exchange.controllerCommit();
+  const firstDelivery = exchange.guardianReceiveEvent(first.frame);
+  assert.equal(firstDelivery.counted, true);
+
+  // ACK is lost. Uno retransmits the exact TX_COMMITTED event, not the cash mutation.
+  const retry = exchange.retryReport();
+  assert.equal(retry.frame, first.frame);
+  const duplicateDelivery = exchange.guardianReceiveEvent(retry.frame);
+  assert.equal(duplicateDelivery.duplicate, true);
+  assert.equal(duplicateDelivery.counted, false);
+  assert.equal(duplicateDelivery.ack, firstDelivery.ack);
+  assert.equal(exchange.guardianCommitCount, 1);
+  assert.equal(exchange.controllerCommitCount, 1);
+  assert.equal(exchange.controllerReceiveAck(duplicateDelivery.ack).reconciled, true);
+  assert.equal(exchange.awaitingAck, false);
+});
+
+test("commit report retry exhaustion fails closed without repeating controller mutation", () => {
+  const exchange = new ReliableCommitExchange({ id: "T3", amount: 500, maxAttempts: 2 });
+  exchange.controllerCommit();
+  assert.equal(exchange.retryReport().attempt, 2);
+  assert.deepEqual(exchange.retryReport(), { ok: false, reason: "RETRY_EXHAUSTED" });
+  assert.equal(exchange.faulted, true);
+  assert.equal(exchange.controllerCommitCount, 1);
+  assert.equal(exchange.controllerBalance, 24500);
+  assert.equal(exchange.guardianCommitCount, 0);
 });
 
 test("wrap-safe elapsed milliseconds works across uint32 rollover", () => {
