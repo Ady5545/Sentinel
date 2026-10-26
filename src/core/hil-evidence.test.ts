@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   canBeginHilWithdrawal,
+  canClearHilFaultAfterPairedReset,
   initialHilShadowState,
   invalidateHilShadow,
   parseKeyValueText,
@@ -198,5 +199,22 @@ describe('structured board-event correlation', () => {
 
   it('does not change the transaction from unrelated console observations', () => {
     expect(reduceStructuredHilTransaction(requested, 'uno', { type: 'CONSOLE_LINE' })).toBe(requested);
+  });
+});
+
+
+describe('paired-reset fault clearing', () => {
+  const baseline = { uno: 3, sentinel: 6 };
+
+  it('does not clear a HIL fault merely because both boards look ready again', () => {
+    expect(canClearHilFaultAfterPairedReset('MISMATCH', true, baseline, baseline)).toBe(false);
+    expect(canClearHilFaultAfterPairedReset('REVOKED', true, baseline, { uno: 4, sentinel: 6 })).toBe(false);
+    expect(canClearHilFaultAfterPairedReset('MISMATCH', false, baseline, { uno: 4, sentinel: 7 })).toBe(false);
+  });
+
+  it('clears only after both boards boot again and paired readiness is fresh', () => {
+    expect(canClearHilFaultAfterPairedReset('MISMATCH', true, baseline, { uno: 4, sentinel: 7 })).toBe(true);
+    expect(canClearHilFaultAfterPairedReset('DENIED', true, baseline, { uno: 4, sentinel: 7 })).toBe(false);
+    expect(canClearHilFaultAfterPairedReset('RECONCILED', true, baseline, { uno: 4, sentinel: 7 })).toBe(false);
   });
 });
