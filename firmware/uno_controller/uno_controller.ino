@@ -217,7 +217,7 @@ bool sendFrame(const __FlashStringHelper *type, const __FlashStringHelper *paylo
   char crcText[5];
   snprintf_P(crcText, sizeof(crcText), PSTR("%04X"), crc);
   GuardianSerial.print(crcText);
-  GuardianSerial.print('\\n');
+  GuardianSerial.print('\n');
   return true;
 }
 
