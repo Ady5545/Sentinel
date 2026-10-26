@@ -21,6 +21,51 @@ export interface HilTransaction {
 
 export type BoardRole = 'uno' | 'sentinel';
 
+export interface StructuredBoardEvent {
+  type: string;
+  eventName?: string;
+  id?: string;
+  amount?: number;
+  balance?: number;
+  reason?: string;
+}
+
+/**
+ * Reduce only whitelisted, already-redacted host parser fields into the HIL lifecycle.
+ * This is structured correlation of board-reported evidence, not device attestation.
+ */
+export function reduceStructuredHilTransaction(
+  current: HilTransaction | null,
+  device: BoardRole,
+  event: StructuredBoardEvent
+): HilTransaction | null {
+  const amount = event.amount === undefined ? 'INVALID' : String(event.amount);
+  const id = event.id || '';
+  if (event.type === 'ATM_EVENT' && event.eventName) {
+    return reduceHilTransaction(
+      current,
+      device,
+      'ATM_EVENT|' + event.eventName + '|id=' + id + ';amount=' + amount +
+        (event.balance === undefined ? '' : ';balance=' + event.balance)
+    );
+  }
+  if (event.type === 'PERMIT') {
+    return reduceHilTransaction(current, device, '[PERMIT] One-shot observation issued for ' + id + ';amount=' + amount);
+  }
+  if (event.type === 'DENY') {
+    return reduceHilTransaction(current, device, '[DENY] id=' + id + ';amount=' + amount +
+      (event.reason ? ';reason=' + redactSensitiveSerialText(event.reason) : ''));
+  }
+  if (event.type === 'COMMIT_RECONCILIATION') {
+    return reduceHilTransaction(current, device,
+      '[AUDIT] Matching controller-reported virtual transaction commit observed;id=' + id + ';amount=' + amount);
+  }
+  if (event.type === 'AUTHORITY_REVOKED') {
+    return reduceHilTransaction(current, device, '[REVOKE]');
+  }
+  return current;
+}
+
 export function parseKeyValueText(value: string): Record<string, string> {
   return Object.fromEntries(value.split(';')
     .map(part => {
