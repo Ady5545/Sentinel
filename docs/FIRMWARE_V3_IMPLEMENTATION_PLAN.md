@@ -1,8 +1,8 @@
 # SENTINEL Firmware Engineering Plan — V3 Reliability and Hardening
 
-**Status:** Proposed implementation plan; the firmware changes are NOT implemented by this document  
-**Baseline:** V2 firmware on main  
-**Hardware constraint:** one Arduino Uno + one ESP32 DevKit; preserve existing pins, UART rate, level shifting, resistors, and wiring  
+**Status:** Hardening backlog for the current V3 firmware; CI and physical bench evidence remain required  
+**Baseline:** Current V3 firmware on main; verify main HEAD before every change  
+**Hardware constraint:** one Arduino Uno + one ESP32 DevKit; current peer UART is Uno AltSoftSerial D8 RX / D9 TX and ESP32 UART2 GPIO16 RX / GPIO17 TX at 4800 8N1; common ground and proper level shifting are required  
 **Release rule:** a successful compile is necessary, never proof of successful hardware integration
 
 ---
@@ -25,7 +25,7 @@ Implement this plan in small reviewable phases. Do not replace both firmware fil
 6. **Do not weaken sequence/replay rules to hide the current bug.** Design safe retransmission and idempotency first; never simply skip sequence values or accept stale permits.
 7. **No authority shortcuts.** ACK, HEARTBEAT, STATE, STATUS, logs, and self-reported firmware identity are not transaction permits.
 8. **No secret leakage.** PINs and credential-bearing buffers must not be printed in logs, diagnostics, fixtures, or crash output. Use only fictional test data.
-9. **Hardware stays fixed.** Keep Uno SoftwareSerial RX D2 / TX D3, ESP32 UART2 RX GPIO16 / TX GPIO17, 9600 baud 8N1, USB diagnostics at 115200, common ground, the current level shifting, and the one-Uno/one-ESP32 setup. Do not change resistors or request another board as a software workaround.
+9. **Hardware stays within the available two-board setup.** Use one Uno plus one ESP32; the Uno peer UART uses AltSoftSerial RX D8 / TX D9, the ESP32 uses UART2 RX GPIO16 / TX GPIO17, peer baud is 4800 8N1, USB diagnostics remain 115200, and grounds must be common. Use verified 5 V-to-3.3 V level shifting on Uno TX; do not connect the Uno's 5 V TX directly to an ESP32 GPIO.
 10. **Claims match evidence.** This remains a classroom prototype without a secure element, protected key, trusted PIN-entry device, verified secure boot, physical dispenser interlock, or cryptographic peer authentication. Do not claim production ATM security, arbitrary malware detection, or resistance to an attacker able to forge peer frames.
 
 ## 2. Current baseline and incident analysis
@@ -38,15 +38,15 @@ Implement this plan in small reviewable phases. Do not replace both firmware fil
 | ESP32 | Validates framed UART messages, checks reported state/heartbeat/transaction policy, responds with one-shot PERMIT or DENY, latches REVOKE on detected violations | Make startup, receive errors, retries, state checks and permit lifecycle deterministic |
 | Desktop simulator (future integration) | UI and virtual-cash presentation | Independently enforce its own authorization gate; this firmware plan does not implement the desktop app |
 
-### Confirmed code facts behind the latest handshake failure
+### Confirmed code facts behind the latest UART-status failure
 
-- The Uno sends HELLO on boot and repeats it every second until the handshake completes. Each send consumes a new Uno-side sequence number.
-- Once the ESP32 sees a suitable Uno HELLO, it establishes a session and sends one ESP32 HELLO.
-- The ESP32 currently has no explicit retry/idempotency contract for an unacknowledged startup HELLO. It sends STATUS|HEALTHY only after a later accepted Uno heartbeat.
-- Both receivers expect every accepted frame to be exactly the next sequence number. A gap, duplicate or stale frame latches a fail-closed fault.
-- Therefore, if the startup guardian HELLO is not accepted by the Uno but a later guardian frame is, the Uno can report a guardian sequence gap. Separately, a repeated Uno HELLO after the ESP32 has established the session is treated as an error rather than a safe retransmission.
+- Current V3 firmware uses 4800 baud, 8N1 on the peer link; HELLO retries reuse sequence 1 and the handshake is explicitly completed by a final ACK.
+- The latest paired-board logs show handshake completion and a valid Uno heartbeat arriving at the ESP32; the ESP32 schedules/sends HEALTHY STATUS, while the Uno reports malformed/corrupted guardian frames rather than accepting that status.
+- An ESP32 `sendFrame_return=true` means the UART write was accepted locally; it does not prove the Uno received a valid frame.
+- This update replaces basic SoftwareSerial with AltSoftSerial on fixed D8 RX / D9 TX and lengthens response/retry spacing to give the AVR receiver a more tolerant window.
+- The equal 2.2 kΩ / 2.2 kΩ divider previously described gives roughly 2.5 V at ESP32 RX from a 5 V Uno TX, leaving almost no margin above the ESP32's specified minimum HIGH threshold. It is not a robust level-shifting design; a proper level shifter or correctly calculated divider is preferred.
 
-**Not yet proven:** the serial logs alone do not establish why a particular frame was missed. SoftwareSerial timing, receive-window behavior, UART buffering, boot/reset timing and back-to-back frame scheduling are hypotheses to test, not facts to assert.
+**Not yet proven:** the exact cause is not established from logs alone. UART timing and input signal margin are plausible contributors; only the next paired-board test can confirm whether this firmware and the actual electrical link are stable.
 
 ### First engineering task
 
@@ -77,7 +77,7 @@ The protocol redesign is the first code milestone because transactions cannot be
 
 ### 4.1 Transport contract
 
-- Preserve physical UART connections, 9600 baud and 8N1. Treat the link as **scheduled half-duplex at the application layer** because Uno SoftwareSerial is timing-sensitive.
+- Use the documented current peer link: Uno AltSoftSerial RX D8 / TX D9, ESP32 UART2 RX GPIO16 / TX GPIO17, 4800 baud 8N1. Keep the application-level stop-and-wait schedule even though AltSoftSerial improves timing.
 - Maintain newline-delimited ASCII framing and strict maximum frame/payload lengths. Define one authoritative maximum and verify every serializer fits it before transmitting bytes.
 - Keep CRC-16/CCITT-FALSE with published test vectors unless a separately reviewed change justifies another checksum. CRC detects accidental corruption, not forgery.
 - Separate a **bad/incomplete frame** from a **well-formed but invalid protocol command**. Never process a partial frame. A failed CRC cannot change state. A transport error may be retried within a bounded policy; a validly framed wrong-session command, conflicting duplicate, unknown state-changing message or illegal transition remains a security fault.
@@ -209,7 +209,7 @@ Specify allowed transitions and prohibit PERMIT unless all preconditions are tru
 - Revoke is latched; ordinary messages cannot clear it. Define which diagnostics are accepted afterward and whether REVOKE is retried.
 - If a REVOKE frame is lost, the Uno must still fail closed on missing guardian freshness/deadline. Safety must not depend on one one-shot REVOKE reaching the peer.
 - Make status distinguish session readiness, heartbeat age, last receive error, pending transaction, revoke reason code and commit observation count. Status must not imply a physical interlock or certain malware detection.
-- Do not send status frames independently at a rate that competes with the Uno's SoftwareSerial windows. Tie link responses to the protocol scheduler.
+- Do not send status frames independently at a rate that competes with controller receive/transmit windows. Tie link responses to the protocol scheduler.
 
 ### 7.4 ESP32 runtime resilience
 
@@ -271,7 +271,7 @@ CI passing proves compilation and deterministic tests only. It cannot prove UART
 
 ### 9.4 Physical bench matrix
 
-Use the actual existing Uno + ESP32 with unchanged wiring. Begin with no configured account/cash; do not commission fictional customer data until the link is stable.
+Use the actual Uno + ESP32 with the documented wiring: Uno AltSoftSerial D8 RX / D9 TX, ESP32 UART2 GPIO16 RX / GPIO17 TX, shared GND, and appropriate 5 V-to-3.3 V level shifting. Begin with no configured account/cash; do not commission fictional customer data until the link is stable.
 
 - Both boards start together; ESP32 first; Uno first; staggered power-on.
 - Clean paired reset after latched failure.

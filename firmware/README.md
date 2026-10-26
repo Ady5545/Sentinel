@@ -16,13 +16,13 @@ This contains the v3 educational ATM-controller and independent-guardian firmwar
 
 ## Upload and wire
 
-Use Arduino IDE on the MacBook Air. Install the Espressif ESP32 board package if needed.
+Use Arduino IDE on the MacBook Air. Install the Espressif ESP32 board package and the **AltSoftSerial** library (Library Manager, by Paul Stoffregen) before compiling the Uno sketch.
 
 1. Upload the ESP32 guardian sketch to **ESP32 Dev Module**. Its USB Serial Monitor is **115200 baud**.
 2. Close that monitor, upload the Uno controller sketch to **Arduino Uno**, and inspect its USB monitor at **115200 baud**.
-3. Power both boards independently over USB. Join GND. Wire **Uno D3 TX → suitable 5 V-to-3.3 V level shifter → ESP32 GPIO16 RX2** and **ESP32 GPIO17 TX2 → Uno D2 RX**. Leave Uno D0/D1 for USB upload/diagnostics.
+3. Power both boards independently over USB. Join GND. AltSoftSerial uses fixed **Uno D8 RX / D9 TX** pins, so wire **Uno D9 TX → suitable 5 V-to-3.3 V level shifter → ESP32 GPIO16 RX2** and **ESP32 GPIO17 TX2 → Uno D8 RX**. Leave Uno D0/D1 for USB upload/diagnostics. AltSoftSerial uses Timer1; PWM on Uno D10 is unavailable (this firmware does not use it).
 4. Never connect Uno 5 V TX directly to an ESP32 GPIO. Prefer a proper level shifter. A divider with 2.2 kΩ series and 2.2 kΩ to ground outputs roughly 2.5 V and may be marginal; use a calculated divider or level shifter. Do not join the 5 V and 3.3 V supply rails.
-5. Both boards must be flashed with the V3 sketches. The Uno should print V3 handshake completion; the ESP32 should progress from NEGOTIATING to OBSERVING after a valid heartbeat. If the 8-second startup deadline expires, power-cycle/restart both boards together after confirming both have V3 firmware. A compile alone does not prove the physical link is stable. Close Arduino Serial Monitor before letting the Electron app open the same USB port.
+5. Both boards must be flashed with the matched V3.3 firmware pair. The Uno should print V3 handshake completion; the ESP32 should progress from NEGOTIATING to OBSERVING after a valid heartbeat. If the 8-second startup deadline expires, power-cycle/restart both boards together after confirming both have V3 firmware. A compile alone does not prove the physical link is stable. Close Arduino Serial Monitor before letting the Electron app open the same USB port.
 
 ## Uno operator/desktop command protocol
 

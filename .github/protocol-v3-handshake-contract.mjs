@@ -67,7 +67,7 @@ test("protocol documentation requires a matched pair and idempotent retries", ()
   assert.match(esp, /if\s*\(heartbeatSeen\)\s*sendFrame\("REVOKE",\s*"POLICY_REVOKE"\)/);
 });
 
-test("Uno serializes heartbeat/status traffic for SoftwareSerial", () => {
+test("Uno serializes heartbeat/status traffic over its timed peer UART", () => {
   assert.match(uno, /bool\s+awaitingGuardianStatus\s*=\s*false\s*;/);
   assert.match(uno, /awaitingGuardianStatus\s*=\s*true\s*;/);
   assert.match(uno, /!awaitingGuardianStatus[\s\S]*sendHeartbeat\(now\)/);
@@ -75,16 +75,27 @@ test("Uno serializes heartbeat/status traffic for SoftwareSerial", () => {
   assert.ok(statusBranch >= 0, "Uno must have a STATUS receive branch");
   assert.match(uno.slice(statusBranch, statusBranch + 420), /awaitingGuardianStatus\s*=\s*false\s*;/);
   assert.match(esp, /pendingHealthyStatus\s*=\s*true;/);
-  assert.match(esp, /HEALTHY_STATUS_TURNAROUND_MS\s*=\s*60UL/);
+  assert.match(esp, /HEALTHY_STATUS_TURNAROUND_MS\s*=\s*100UL/);
   assert.match(esp, /if\s*\(pendingHealthyStatus[\s\S]*?sendFrameAtSequence\("STATUS",\s*"HEALTHY",\s*healthyStatusSequence\)/,
     "ESP32 must defer HEALTHY STATUS and retry the same sequence instead of replying inside the heartbeat RX handler");
-  assert.match(esp, /HEALTHY_STATUS_RETRY_MS\s*=\s*140UL/);
+  assert.match(esp, /HEALTHY_STATUS_RETRY_MS\s*=\s*250UL/);
   assert.match(esp, /HEALTHY_STATUS_MAX_ATTEMPTS\s*=\s*3/);
   assert.match(uno, /lastGuardianStatusSequence\s*!=\s*0/);
   assert.match(uno, /MAX_INITIAL_STATUS_FRAME_DROPS\s*=\s*3/);
   assert.match(protocol, /at most one.{0,80}HEARTBEAT/i);
   assert.match(protocol, /clears the outstanding-heartbeat flag only after receiving and validating a STATUS/i);
   assert.match(uno, /if\s*\(sendFrame\(F\("HEARTBEAT"\),\s*payload\)\)\s*\{[\s\S]{0,180}lastHeartbeatAt\s*=\s*millis\(\)/);
+});
+
+
+test("Uno peer UART uses timer-assisted AltSoftSerial on fixed Uno pins", () => {
+  assert.match(uno, /#include <AltSoftSerial\.h>/);
+  assert.match(uno, /AltSoftSerial\s+GuardianSerial\s*;/);
+  assert.match(uno, /PEER_RX_PIN\s*=\s*8/);
+  assert.match(uno, /PEER_TX_PIN\s*=\s*9/);
+  assert.doesNotMatch(uno, /SoftwareSerial/);
+  assert.match(uno, /SENTINEL ATM CONTROLLER V3\.3 READY/);
+  assert.match(protocol, /AltSoftSerial[\s\S]{0,100}D8 RX[\s\S]{0,40}D9 TX/i);
 });
 
 test("both boards use the same slower peer UART and bounded status retry contract", () => {

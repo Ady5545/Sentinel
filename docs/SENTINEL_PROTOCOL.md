@@ -1,9 +1,9 @@
 # SENTINEL UNO ↔ ESP32 Protocol Specification — v3
 
-**Status:** V3 handshake implementation; V3.1 UART turn-taking; V3.2 bounded HEALTHY-status retry; hardware bench validation required  
+**Status:** V3.3 timing-assisted Uno peer UART and bounded HEALTHY-status retry; physical bench validation still required  
 **UART:** 4800 baud, 8 data bits, no parity, 1 stop bit  
 **USB diagnostics/desktop command link:** 115200 baud  
-**Boards:** one Arduino Uno (ATM-controller demo) + one ESP32 DevKit (guardian demo)
+**Boards:** one Arduino Uno (ATM-controller demo) + one ESP32 DevKit (guardian demo). Uno peer UART: AltSoftSerial D8 RX / D9 TX. ESP32 UART2: GPIO16 RX / GPIO17 TX.
 
 ## Safety properties
 
@@ -55,18 +55,18 @@ If the first ESP32 HELLO is missed, the Uno retries the identical HELLO at seque
 
 The ESP32 retries its HELLO every 800 ms and both boards use an 8-second bounded startup deadline. If negotiation or the first valid heartbeat does not complete in time, the relevant board latches a fault. A clean paired restart is required after a latched failure. Until the first valid heartbeat confirms the whole startup exchange, neither side may issue a PERMIT, and the ESP32 withholds the session REVOKE frame because the Uno may not have received the final ACK yet.
 
-### V3.1 heartbeat/status turn-taking
+### V3.3 heartbeat/status turn-taking
 
-The Arduino Uno's `SoftwareSerial` link is timing-sensitive: while the Uno is transmitting a frame, it cannot reliably receive an ESP32 response. The V3.1 scheduler therefore uses a strict request/response rhythm for liveness:
+The Arduino Uno peer link now uses **AltSoftSerial** on fixed D8 RX / D9 TX pins. Its timer-assisted timing is more compatible with continuous receive and USB diagnostics than the basic `SoftwareSerial` implementation; it reserves Timer1 and makes PWM on D10 unavailable. The protocol still uses a strict request/response rhythm for predictable load:
 
 1. The Uno sends **at most one** `HEARTBEAT`.
 2. The Uno marks that heartbeat as outstanding and sends no second heartbeat while it is outstanding.
-3. The ESP32 validates the heartbeat and schedules `STATUS|HEALTHY` after a 60 ms turnaround.
-4. The ESP32 makes at most three total transmissions of that same STATUS frame, reusing the same sequence number and spacing retries by 140 ms. It does not send unsolicited or periodic STATUS frames.
+3. The ESP32 validates the heartbeat and schedules `STATUS|HEALTHY` after a 100 ms turnaround.
+4. The ESP32 makes at most three total transmissions of that same STATUS frame, reusing the same sequence number and spacing retries by 250 ms. It does not send unsolicited or periodic STATUS frames.
 5. The Uno clears the outstanding-heartbeat flag only after receiving and validating a STATUS. It ignores an exact duplicate of the most recently accepted HEALTHY STATUS only within a 600 ms retry window, without refreshing freshness or advancing the sequence.
 6. The Uno may then send the next heartbeat after the normal heartbeat interval. If initial STATUS frames are malformed, the Uno drops at most three while still withholding freshness and permits; malformed traffic outside that startup allowance remains fail-closed. If no valid STATUS arrives, guardian timeout locks the controller.
 
-This scheduling rule is deliberately an application-layer turn-taking mechanism rather than a relaxation of sequence validation. It prevents the failure mode where a valid ESP32 status response is transmitted while the Uno is still inside a SoftwareSerial transmit window. STATUS is liveness evidence only and is never a transaction permit.
+This scheduling rule is deliberately an application-layer turn-taking mechanism rather than a relaxation of sequence validation. AltSoftSerial improves timing but does not replace correct voltage-level translation or physical bench validation. STATUS is liveness evidence only and is never a transaction permit.
 
 The ESP32 sends `STATUS|HEALTHY` only in response to a validated UNO heartbeat. Bounded retries reuse the same sequence and are not independent liveness evidence; the ESP32 does not send unsolicited or periodic STATUS frames. A missing/invalid heartbeat or protocol timeout still fails closed. CRC detects accidental corruption, not malicious forgery.
 
