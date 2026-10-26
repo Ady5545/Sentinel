@@ -267,7 +267,7 @@ export function researchSessionReducer(
     });
     next = {
       ...next, mode: action.mode, runId: action.runId, hilTransaction: null,
-      lastSimulationEventKey: null
+      hilShadow: initialHilShadowState(), lastSimulationEventKey: null
     };
     return appendRecord(next, action.at, 'SYSTEM', 'RUN_STARTED', 'HOST_DERIVED', {
       schemaVersion: 1, mode: action.mode, runId: action.runId,
