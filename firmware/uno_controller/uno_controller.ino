@@ -27,6 +27,7 @@ static const unsigned long PEER_BAUD = 9600;
 static const unsigned long USB_BAUD = 115200;
 static const unsigned long HEARTBEAT_MS = 500;
 static const unsigned long HELLO_RETRY_MS = 650UL;
+static const unsigned long HANDSHAKE_TIMEOUT_MS = 8000UL;
 static const unsigned long DEFAULT_GUARDIAN_TIMEOUT_MS = 2600UL;
 static const unsigned long DEFAULT_TRANSACTION_DECISION_TIMEOUT_MS = 1800UL;
 static const unsigned long DEFAULT_PIN_ENTRY_TIMEOUT_MS = 30000UL;
@@ -112,6 +113,7 @@ uint32_t lastGuardianFrameAt = 0;
 uint32_t lastGuardianStatusAt = 0;
 uint32_t lastHeartbeatAt = 0;
 uint32_t lastHelloAt = 0;
+uint32_t handshakeStartedAt = 0;
 bool guardianHelloSeen = false;
 bool handshakeComplete = false;  // True only after the final V3 handshake ACK.
 uint32_t helloRetryCount = 0;
@@ -1047,14 +1049,20 @@ void setup() {
   Serial.print(F("SESSION: "));
   Serial.println(sessionId);
   printHelp();
+  handshakeStartedAt = millis();
   sendFrameAtSequence(F("HELLO"), F("UNO-ATM-V3"), 1);
-  lastHelloAt = millis();
+  lastHelloAt = handshakeStartedAt;
 }
 
 void loop() {
   const uint32_t now = millis();
   pollGuardian();
   pollUsb();
+
+  if (!handshakeComplete && !guardianRevokeLatched &&
+      (uint32_t)(now - handshakeStartedAt) >= HANDSHAKE_TIMEOUT_MS) {
+    enterGuardianLock(F("V3 handshake timeout; clean paired restart required."));
+  }
 
   if (!handshakeComplete && !guardianRevokeLatched &&
       (uint32_t)(now - lastHelloAt) >= HELLO_RETRY_MS) {
