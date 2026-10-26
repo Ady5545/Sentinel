@@ -392,6 +392,15 @@ export default function App() {
     if (!name || parts.some(part => !part)) return { ok: false, error: 'Use a command name followed by single-space-separated arguments.' };
     return sendTypedBoardCommand(device, { name, args });
   };
+  const sendHilUnoCommand = async (command: UnoOperatorCommand) => {
+    const pairFresh = (device: DeviceKey) => boards[device].connected && boards[device].readinessAt > 0 &&
+      Date.now() - boards[device].readinessAt <= 3500 &&
+      boards[device].phase === (device === 'uno' ? 'HEALTHY' : 'OBSERVING');
+    if (researchRun.mode !== 'HIL' || researchRun.phase !== 'ACTIVE' || !pairFresh('uno') || !pairFresh('sentinel')) {
+      return { ok: false, error: 'Typed HIL command denied: active HIL mode and fresh paired readiness are required.' };
+    }
+    return sendTypedBoardCommand('uno', command);
+  };
 
   return <div className="sentinel-os">
     <header className="os-menubar"><div className="os-brand"><span className="os-brand-mark"><ShieldCheck size={13} /></span><strong>SENTINEL</strong><span className="os-separator">/</span><span>RESEARCH ENVIRONMENT</span></div><div className="os-menubar-center"><span className="os-live-dot" /> LOCAL WORKSTATION <span className="os-separator">·</span> OFFLINE-FIRST</div><div className="os-menubar-right"><span className="os-runtime">{runtime ? runtime.platform.toUpperCase() + ' · ' + runtime.version : 'DEVELOPMENT SESSION'}</span><span className="os-menubar-clock">{clock()}</span></div></header>
@@ -430,7 +439,7 @@ export default function App() {
         {view === 'sentinel' && <SentinelView state={state} boards={boards} />}
         {view === 'experiments' && <><ExperimentView state={state} dispatch={dispatch} /><ResearchRunPanel run={researchRun} scenarioRuns={scenarioRuns} onReplay={replayScenario} /></>}
         {view === 'journal' && <JournalView events={combinedJournalEvents} alerts={alerts} onExport={exportEvidence} researchRun={researchRun} />}
-        {view === 'hardware' && <HardwareView ports={ports} chosenPort={chosenPort} setChosenPort={setChosenPort} boards={boards} message={portMessage} serialEvents={serialEvents} refresh={refreshPorts} connect={connectBoard} disconnect={disconnectBoard} sendCommand={sendBoardCommand} sendTypedCommand={(command) => sendTypedBoardCommand('uno', command)} researchMode={researchRun.mode} researchPhase={researchRun.phase} hilShadow={hilShadow} hilTransaction={hilTransaction} boardBootEpochs={boardBootEpochs} hilFaultResetBaseline={hilFaultResetBaseline} nowMs={nowMs} clearHilTransaction={() => { setHilTransaction(null); setHilTransactionStartedAt(null); setHilFaultResetBaseline(null); }} />}
+        {view === 'hardware' && <HardwareView ports={ports} chosenPort={chosenPort} setChosenPort={setChosenPort} boards={boards} message={portMessage} serialEvents={serialEvents} refresh={refreshPorts} connect={connectBoard} disconnect={disconnectBoard} sendCommand={sendBoardCommand} sendTypedCommand={sendHilUnoCommand} researchMode={researchRun.mode} researchPhase={researchRun.phase} hilShadow={hilShadow} hilTransaction={hilTransaction} boardBootEpochs={boardBootEpochs} hilFaultResetBaseline={hilFaultResetBaseline} nowMs={nowMs} clearHilTransaction={() => { setHilTransaction(null); setHilTransactionStartedAt(null); setHilFaultResetBaseline(null); }} />}
         <footer className="status-footer"><span><i /> DOMAIN CORE ACTIVE</span><span>{eventCount.toString().padStart(3,'0')} EVENTS · {alerts.toString().padStart(2,'0')} ALERTS</span><span>FICTIONAL ACCOUNT · VIRTUAL CASH · RESEARCH PROTOTYPE</span></footer>
       </div>
     </main>
@@ -743,7 +752,12 @@ function HardwareView({ ports, chosenPort, setChosenPort, boards, message, seria
       setCommandFeedback('Connect the selected board before sending an operator command.');
       return;
     }
-    const commandName = command.split(' ')[0];
+    const commandName = command.split(' ')[0].toUpperCase();
+    const typedHILOnly = ['ADD_ACCOUNT', 'SET_CASH', 'CARD', 'PIN', 'BALANCE', 'WITHDRAW', 'CHANGE_PIN', 'FIXTURE_MISMATCH'];
+    if (device === 'uno' && typedHILOnly.includes(commandName)) {
+      setCommandFeedback('Blocked: setup/customer/withdrawal commands must use the typed HIL operator workflow while the research coordinator is in active HIL mode.');
+      return;
+    }
     const requiresPair = ['CARD', 'PIN', 'BALANCE', 'WITHDRAW', 'CHANGE_PIN', 'FIXTURE_MISMATCH'].includes(commandName);
     if (requiresPair && !pairReady) {
       setCommandFeedback('Blocked by the desktop safety gate: both USB consoles must be open, the Uno must report accepted HEALTHY status, and the ESP32 must report OBSERVING.');
