@@ -46,6 +46,7 @@ uint32_t initialUnoHelloSequence = 0;
 uint32_t handshakeStartedAt = 0;
 uint32_t lastHelloAt = 0;
 uint32_t handshakeRetryCount = 0;
+uint32_t duplicateUnoHelloCount = 0;
 uint32_t lastValidUnoAt = 0;
 uint32_t lastHeartbeatAt = 0;
 uint32_t lastStatusAt = 0;
@@ -495,10 +496,10 @@ void handleUnoLine(char *line) {
     } else {
       sendFrameAtSequence("HELLO", "ESP32-SENTINEL-V3", 1);
     }
-    ++handshakeRetryCount;
-    if ((handshakeRetryCount % 5UL) == 1UL) {
+    ++duplicateUnoHelloCount;
+    if ((duplicateUnoHelloCount % 5UL) == 1UL) {
       Serial.print(F("[LINK_RETRY] Replayed fixed-sequence handshake response; duplicate HELLOs="));
-      Serial.println(handshakeRetryCount);
+      Serial.println(duplicateUnoHelloCount);
     }
     return;
   }
@@ -685,10 +686,13 @@ void loop() {
   pollUsb();
   const uint32_t now = millis();
 
-  if (sessionEstablished && !handshakeConfirmed && !revokeLatched) {
+  if (sessionEstablished && !heartbeatSeen && !revokeLatched) {
+    // Keep the absolute deadline active until the first valid heartbeat proves
+    // the final ACK reached the Uno and it resumed the normal protocol stream.
     if ((uint32_t)(now - handshakeStartedAt) >= HANDSHAKE_TIMEOUT_MS) {
       revoke("V3 handshake confirmation timeout; clean paired restart required.");
-    } else if ((uint32_t)(now - lastHelloAt) >= HELLO_RETRY_MS) {
+    } else if (!handshakeConfirmed &&
+               (uint32_t)(now - lastHelloAt) >= HELLO_RETRY_MS) {
       ++handshakeRetryCount;
       if ((handshakeRetryCount % 5UL) == 1UL) {
         Serial.print(F("[LINK_RETRY] Re-sending identical ESP32 HELLO seq=1; retries="));
