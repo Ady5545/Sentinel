@@ -79,7 +79,7 @@ function parseBoardLine(device, line) {
     };
   }
 
-  const permit = line.match(/^\[PERMIT\] One-shot observation issued for ([A-Za-z0-9_-]{1,16});amount=(0|[1-9][0-9]*)/);
+  const permit = line.match(/^\[PERMIT\] One-shot observation issued for ([A-Za-z0-9_-]{1,16});\s*amount=(0|[1-9][0-9]*)/);
   if (device === 'sentinel' && permit) {
     return { type: 'PERMIT', id: safeId(permit[1]), amount: safeAmount(permit[2]) };
   }
