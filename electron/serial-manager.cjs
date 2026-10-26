@@ -272,8 +272,12 @@ class SerialManager extends EventEmitter {
 
   setResearchMode(mode) {
     if (mode !== 'SIMULATION' && mode !== 'HIL') return { ok: false, error: 'Unknown research mode.' };
+    if (mode === this.researchMode) return { ok: true, mode };
     if (mode === 'HIL' && this.hilFaultLatched) {
       return { ok: false, error: 'HIL mode is blocked by a latched host fault. Reboot both boards after the fault, re-establish fresh paired readiness, and explicitly clear the fault first.' };
+    }
+    if (this.researchMode === 'HIL' && mode === 'SIMULATION' && this.hilShadowTouched) {
+      this.latchHilFault('The operator left HIL mode after board configuration; paired reset is required before a new HIL run can begin.');
     }
     this.researchMode = mode;
     this.emit('event', { kind: 'research-mode', mode, message: mode === 'HIL' ? 'Hardware-in-the-loop commands enabled subject to paired readiness.' : 'Software-only simulation mode; HIL-only board commands are disabled.' });
