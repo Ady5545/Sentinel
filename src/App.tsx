@@ -474,7 +474,7 @@ function HILOperatorControls({ pairReady, unoConnected, sendCommand }: {
       <div><label className="field-label" htmlFor="hil-c50">₹50 NOTES</label><input id="hil-c50" inputMode="numeric" value={cash50} onChange={event => setCash50(event.target.value)} disabled={busy} /></div>
     </div>
     <div className="hil-action-row"><button className="board-button" onClick={() => void configureCash()} disabled={!unoConnected || busy}>Configure virtual cassette</button></div>
-    <divider />
+    <div className="divider-line" />
     <div className="hil-setup-grid customer-ops">
       <div><label className="field-label" htmlFor="hil-customer-pin">CUSTOMER DEMO PIN</label><input id="hil-customer-pin" type="password" inputMode="numeric" value={customerPin} onChange={event => setCustomerPin(event.target.value.replace(/[^0-9]/g, '').slice(0, 6))} autoComplete="off" disabled={busy || !pairReady} /></div>
       <div><label className="field-label" htmlFor="hil-withdraw-amount">WITHDRAWAL AMOUNT (₹)</label><input id="hil-withdraw-amount" inputMode="numeric" value={withdrawAmount} onChange={event => setWithdrawAmount(event.target.value)} disabled={busy || !pairReady} /></div>
