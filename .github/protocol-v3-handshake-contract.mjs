@@ -115,10 +115,12 @@ test("ESP32 flushes completed STATUS bytes locally without claiming peer accepta
   assert.ok(esp.includes("peer acceptance still unconfirmed"));
 });
 
-test("guardian commit-reconciliation log includes the exact matched transaction ID and amount", () => {
+test("guardian commit-reconciliation log includes the exact validated transaction ID and amount", () => {
   assert.ok(esp.includes('[RECONCILE] Matching controller-reported virtual commit id='));
-  assert.ok(esp.includes('Serial.print(pendingPermitId);'));
-  assert.ok(esp.includes('Serial.println(pendingPermitAmount);'));
+  assert.ok(esp.includes('Serial.print(id);'));
+  assert.ok(esp.includes('Serial.println(amount);'));
+  assert.ok(esp.includes('amount != pendingPermitAmount'));
+  assert.ok(esp.includes('strcmp(id, pendingPermitId) != 0'));
 });
 
 test("Uno reports exact virtual cassette counts and total for the desktop shadow", () => {
