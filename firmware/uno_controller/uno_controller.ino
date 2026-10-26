@@ -417,26 +417,25 @@ bool makeNotePlan(uint32_t amount, uint16_t plan[4]) {
                              (uint32_t)cashInventory.notes50 * 50UL;
   if (available < amount) return false;
 
-  const int max500 = (int)((amount / 500UL < cashInventory.notes500) ?
-                           amount / 500UL : cashInventory.notes500);
-  for (int n500 = max500; n500 >= 0; --n500) {
-    uint32_t rem500 = amount - (uint32_t)n500 * 500UL;
-    const int max200 = (int)((rem500 / 200UL < cashInventory.notes200) ?
-                             rem500 / 200UL : cashInventory.notes200);
-    for (int n200 = max200; n200 >= 0; --n200) {
-      uint32_t rem200 = rem500 - (uint32_t)n200 * 200UL;
-      const int max100 = (int)((rem200 / 100UL < cashInventory.notes100) ?
-                               rem200 / 100UL : cashInventory.notes100);
-      for (int n100 = max100; n100 >= 0; --n100) {
-        const uint32_t rem100 = rem200 - (uint32_t)n100 * 100UL;
-        if (rem100 % 50UL != 0 || rem100 / 50UL > cashInventory.notes50) continue;
-        plan[0] = (uint16_t)n500;
-        plan[1] = (uint16_t)n200;
-        plan[2] = (uint16_t)n100;
-        plan[3] = (uint16_t)(rem100 / 50UL);
-        return true;
-      }
-    }
+  // Search only the possible count of the largest denomination. For each
+  // candidate, greedy selection across the remaining nested denominations is
+  // complete for this 500/200/100/50 note set and bounded on an Uno.
+  const uint32_t max500 = (amount / 500UL < cashInventory.notes500) ?
+                          amount / 500UL : cashInventory.notes500;
+  for (int32_t n500 = (int32_t)max500; n500 >= 0; --n500) {
+    uint32_t remaining = amount - (uint32_t)n500 * 500UL;
+    const uint32_t n200 = (remaining / 200UL < cashInventory.notes200) ?
+                          remaining / 200UL : cashInventory.notes200;
+    remaining -= n200 * 200UL;
+    const uint32_t n100 = (remaining / 100UL < cashInventory.notes100) ?
+                          remaining / 100UL : cashInventory.notes100;
+    remaining -= n100 * 100UL;
+    if (remaining % 50UL != 0 || remaining / 50UL > cashInventory.notes50) continue;
+    plan[0] = (uint16_t)n500;
+    plan[1] = (uint16_t)n200;
+    plan[2] = (uint16_t)n100;
+    plan[3] = (uint16_t)(remaining / 50UL);
+    return true;
   }
   return false;
 }
