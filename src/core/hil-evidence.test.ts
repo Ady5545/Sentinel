@@ -62,7 +62,7 @@ describe('HIL evidence correlation', () => {
   });
 
   it('marks deny and revoke as terminal-but-not-successful states', () => {
-    const denied = reduceHilTransaction(requested, 'sentinel', '[DENY] id=T0000007;reason=TX_LIMIT');
+    const denied = reduceHilTransaction(requested, 'sentinel', '[DENY] id=T0000007;amount=500;reason=TX_LIMIT');
     expect(denied?.phase).toBe('DENIED');
     expect(canBeginHilWithdrawal(denied)).toBe(true);
 
@@ -74,6 +74,22 @@ describe('HIL evidence correlation', () => {
   it('does not claim completion from uncorrelated console text', () => {
     expect(reduceHilTransaction(null, 'sentinel', 'sendFrame_return=true')).toBeNull();
     expect(reduceHilTransaction(null, 'sentinel', '[AUDIT] Matching controller-reported virtual transaction commit observed id=T0000007;amount=500')?.phase).toBe('MISMATCH');
+  });
+
+  it('requires exact ID and amount for UNO or guardian denial decisions', () => {
+    const missingAmount = reduceHilTransaction(requested, 'sentinel', '[DENY] id=T0000007;reason=TX_LIMIT');
+    expect(missingAmount?.phase).toBe('MISMATCH');
+    expect(missingAmount?.id).toBe(requested.id);
+
+    const wrongAmount = reduceHilTransaction(requested, 'sentinel', '[DENY] id=T0000007;amount=1000;reason=TX_LIMIT');
+    expect(wrongAmount?.phase).toBe('MISMATCH');
+    expect(wrongAmount?.unoCommitSeen).toBe(false);
+
+    const wrongId = reduceHilTransaction(requested, 'uno', 'ATM_EVENT|WITHDRAWAL_DENIED|id=T0000008;amount=500;reason=TX_LIMIT');
+    expect(wrongId?.phase).toBe('MISMATCH');
+
+    const missingId = reduceHilTransaction(requested, 'uno', 'ATM_EVENT|WITHDRAWAL_DENIED|reason=TX_LIMIT');
+    expect(missingId?.phase).toBe('MISMATCH');
   });
 });
 
