@@ -494,11 +494,42 @@ function ExperimentView({ state, dispatch }: { state: AtmState; dispatch: Dispat
   </>;
 }
 
-function JournalView({ events, alerts, onExport }: { events: JournalEvent[]; alerts: number; onExport: (format: 'json' | 'csv') => void }) {
+function JournalView({ events, alerts, onExport, researchRecords, currentRunId }: {
+  events: JournalEvent[];
+  alerts: number;
+  onExport: (format: 'json' | 'csv') => void;
+  researchRecords: readonly ResearchRunRecord[];
+  currentRunId: string;
+}) {
+  const runIds = Array.from(new Set(researchRecords.map(record => record.runId))).reverse();
+  const [selectedRunId, setSelectedRunId] = useState(currentRunId);
+  useEffect(() => setSelectedRunId(currentRunId), [currentRunId]);
+  const replayRecords = replayRunRecords(researchRecords, selectedRunId);
+
   return <>
-    <ScreenHeading number="05" eyebrow="TRACEABLE RUN HISTORY" title="Event journal" description="Controller observations, policy findings and actual virtual-gate outcomes." action={<div className="journal-export-actions"><button className="quiet-button" onClick={() => onExport('json')}><FileText size={13} /> Export JSON</button><button className="quiet-button" onClick={() => onExport('csv')}><Activity size={13} /> Export CSV</button></div>} />
-    <div className="journal-stats"><div><span>RECORDED EVENTS</span><strong>{events.length.toString().padStart(3,'0')}</strong></div><div><span>ALERT / WARNING EVENTS</span><strong>{alerts.toString().padStart(3,'0')}</strong></div><div><span>DATA PROVENANCE</span><strong>SIMULATION</strong></div></div>
+    <ScreenHeading number="05" eyebrow="TRACEABLE RUN HISTORY" title="Event journal" description="Controller observations, policy findings, mode/session changes, HIL shadow decisions and exported evidence." action={<div className="journal-export-actions"><button className="quiet-button" onClick={() => onExport('json')}><FileText size={13} /> Export JSON</button><button className="quiet-button" onClick={() => onExport('csv')}><Activity size={13} /> Export CSV</button></div>} />
+    <div className="journal-stats"><div><span>RECORDED EVENTS</span><strong>{events.length.toString().padStart(3,'0')}</strong></div><div><span>ALERT / WARNING EVENTS</span><strong>{alerts.toString().padStart(3,'0')}</strong></div><div><span>RESEARCH RECORDS</span><strong>{researchRecords.length.toString().padStart(3,'0')}</strong></div></div>
     <div className="journal-list">{events.length === 0 ? <div className="empty-state">No events in this run.</div> : events.map(event => <JournalRow key={event.id} event={event} />)}</div>
+    <section className="data-panel">
+      <PanelTitle icon={<Activity size={16} />} title="SOFTWARE-ONLY RUN REPLAY" suffix="READ-ONLY · NO HARDWARE COMMANDS" />
+      <div className="hil-setup-grid">
+        <div><label className="field-label" htmlFor="research-run-replay">SELECT RUN</label>
+          <select id="research-run-replay" value={selectedRunId} onChange={event => setSelectedRunId(event.target.value)}>
+            {runIds.map(runId => <option key={runId} value={runId}>{runId}</option>)}
+          </select>
+        </div>
+        <div><label className="field-label">RECORD COUNT</label><div className="authority-row"><b>{replayRecords.length}</b></div></div>
+      </div>
+      {replayRecords.length === 0
+        ? <div className="empty-state">No records for this run ID.</div>
+        : <div className="journal-list">{replayRecords.slice(-40).reverse().map(record => <article className="journal-row severity-info" key={record.recordId}>
+            <div className="journal-icon"><Terminal size={15} /></div>
+            <time>{new Date(record.at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</time>
+            <div className="journal-copy"><strong>{record.kind}</strong><p>{record.provenance} · {JSON.stringify(record.details)}</p><small>{record.source} · {record.runId} · #{record.sequence}</small></div>
+            <span className="severity-tag">{record.mode}</span>
+          </article>)}</div>}
+      <p className="muted-note">Replay displays a read-only, sequence-ordered snapshot of that run’s evidence. It never reconnects to boards, sends commands, replays withdrawals, or re-executes a fixture. Export the JSON/CSV record for an offline copy.</p>
+    </section>
   </>;
 }
 function JournalRow({ event }: { event: JournalEvent }) {
