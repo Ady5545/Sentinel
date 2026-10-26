@@ -1,6 +1,6 @@
 import { useEffect, useReducer, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import {
-  Activity, ArrowRight, Banknote, BookOpen, CheckCircle2, ChevronRight, CircleAlert, Cpu,
+  Activity, ArrowRight, Banknote, CheckCircle2, ChevronRight, CircleAlert, Cpu,
   FileText, Fingerprint, Landmark, LockKeyhole, Monitor, Plug, RotateCcw,
   ShieldAlert, ShieldCheck, Terminal, WalletCards, XOctagon
 } from 'lucide-react';
@@ -14,12 +14,26 @@ import {
   reconcileHilShadowCommit, type HilBoardResetEpochs, type HilShadowState, type HilTransaction
 } from './core/hil-evidence';
 import {
-  createResearchRun, reduceResearchRun, replaySyntheticScenario, researchRunToJson,
-  SYNTHETIC_SCENARIOS, type ResearchRunRecord, type SyntheticScenario
+  createResearchRun, reduceResearchRun, researchRunToJson,
+  type ResearchRunRecord
 } from './core/research-session';
 
 type View = 'terminal' | 'machine' | 'sentinel' | 'experiments' | 'journal' | 'hardware';
 type DeviceKey = 'uno' | 'sentinel';
+type HardwareAttackPhase = 'idle' | 'sending' | 'awaiting-uno' | 'fixture-injected' | 'guardian-revoked' | 'controller-locked' | 'error';
+type HardwareAttackState = {
+  phase: HardwareAttackPhase;
+  startedAt: number;
+  detail: string;
+  unoEvidence: string;
+  sentinelEvidence: string;
+  controllerEvidence: string;
+};
+const initialHardwareAttack: HardwareAttackState = {
+  phase: 'idle', startedAt: 0,
+  detail: 'Connect both boards and wait for fresh readiness before launching the controlled fixture.',
+  unoEvidence: '', sentinelEvidence: '', controllerEvidence: ''
+};
 type UnoOperatorCommand =
   | { name: 'ADD_ACCOUNT'; args: [string, string, string] }
   | { name: 'SET_CASH'; args: [string, string, string, string] }
@@ -69,11 +83,10 @@ export default function App() {
   const [hilFaultResetBaseline, setHilFaultResetBaseline] = useState<HilBoardResetEpochs | null>(null);
   const [researchRun, setResearchRun] = useState<ResearchRunRecord>(() => createResearchRun('run-' + Date.now().toString(36), 'SOFTWARE_ONLY'));
   const [hilShadow, setHilShadow] = useState<HilShadowState>(() => initialHilShadowState());
-  const [scenarioRuns, setScenarioRuns] = useState<ResearchRunRecord[]>([]);
   const recordedAtmEventCount = useRef(0);
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const [securityRunPhase, setSecurityRunPhase] = useState<'idle' | 'initializing' | 'inspecting' | 'revoking' | 'secured'>('idle');
-  const [portMessage, setPortMessage] = useState('Board access is optional. The virtual ATM works without hardware.');
+  const [attackDemo, setAttackDemo] = useState<HardwareAttackState>(initialHardwareAttack);
+  const [portMessage, setPortMessage] = useState('Connect the Arduino UNO and ESP32 in Hardware Bench; USB-open alone is not readiness.');
 
   useEffect(() => {
     const handle = window.setInterval(() => setNowMs(Date.now()), 1000);
@@ -81,24 +94,17 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (securityRunPhase === 'idle' || securityRunPhase === 'secured') return;
-    const delay = securityRunPhase === 'initializing' ? 1800 : securityRunPhase === 'inspecting' ? 2800 : 2200;
-    const handle = window.setTimeout(() => {
-      if (securityRunPhase === 'initializing') setSecurityRunPhase('inspecting');
-      else if (securityRunPhase === 'inspecting') {
-        dispatch({ type: 'RUN_COMPROMISE_SCENARIO' });
-        setSecurityRunPhase('revoking');
-      } else if (securityRunPhase === 'revoking') setSecurityRunPhase('secured');
-    }, delay);
-    return () => window.clearTimeout(handle);
-  }, [securityRunPhase]);
-
-  const runGuidedSecurityDemo = () => {
-    dispatch({ type: 'RESET_SCENARIO' });
-    dispatch({ type: 'SET_MODE', mode: 'protected' });
-    setSecurityRunPhase('initializing');
-    navigateTo('experiments');
-  };
+    if (!['sending', 'awaiting-uno', 'fixture-injected', 'guardian-revoked'].includes(attackDemo.phase)) return;
+    if (!attackDemo.startedAt || nowMs - attackDemo.startedAt < 14000) return;
+    setAttackDemo(previous => {
+      if (!['sending', 'awaiting-uno', 'fixture-injected'].includes(previous.phase)) return previous;
+      return {
+        ...previous,
+        phase: 'error',
+        detail: 'Timed out waiting for the next board-reported event. A USB write is not proof of detection; check firmware, UART wiring, and the actual serial evidence before claiming success.'
+      };
+    });
+  }, [attackDemo.phase, attackDemo.startedAt, nowMs]);
 
   useEffect(() => {
     if (hilTransaction?.phase === 'RECONCILED') {
@@ -145,6 +151,36 @@ export default function App() {
     const unsubscribe = api.onSerialEvent(event => {
       const safeLine = event.kind === 'line' ? redactSensitiveSerialText(event.line || '') : '';
       const detail = event.kind === 'line' ? safeLine : event.message || event.kind;
+      if (event.kind === 'line') {
+        const rawLine = String(event.line || '');
+        const observedAt = typeof event.at === 'number' ? event.at : new Date(event.at || Date.now()).getTime();
+        const runEvidenceIsCurrent = (previous: HardwareAttackState) =>
+          previous.startedAt > 0 && observedAt >= previous.startedAt - 1000 &&
+          ['sending', 'awaiting-uno', 'fixture-injected', 'guardian-revoked'].includes(previous.phase);
+        if (event.device === 'uno' && rawLine.includes('ATM_EVENT|FIXTURE_SENT|')) {
+          setAttackDemo(previous => runEvidenceIsCurrent(previous) ? {
+            ...previous, phase: 'fixture-injected',
+            unoEvidence: redactSensitiveSerialText(rawLine),
+            detail: 'The physical UNO console reported FIXTURE_SENT. The firmware labels the event as a simulated test input, then transmits it over its inter-board UART.'
+          } : previous);
+        }
+        if (event.device === 'sentinel' && (rawLine.includes('[REVOKE]') || rawLine.includes('GUARDIAN_STATUS|mode=REVOKED'))) {
+          setAttackDemo(previous => runEvidenceIsCurrent(previous) ? {
+            ...previous, phase: 'guardian-revoked',
+            sentinelEvidence: redactSensitiveSerialText(rawLine),
+            detail: 'The physical ESP32 console reported a latched guardian revocation. Waiting for the UNO to report its own lock response.'
+          } : previous);
+        }
+        if (event.device === 'uno' &&
+            (rawLine.includes('[SECURITY_LOCK]') || rawLine.includes('GUARDIAN_STATUS|mode=REVOKED') ||
+             rawLine.includes('GUARDIAN_REVOKED') || rawLine.includes('GUARDIAN_LOCKED'))) {
+          setAttackDemo(previous => runEvidenceIsCurrent(previous) ? {
+            ...previous, phase: 'controller-locked',
+            controllerEvidence: redactSensitiveSerialText(rawLine),
+            detail: 'The physical UNO console reported a guardian-lock response. The steps below now reflect board-reported events, not a software-only ATM balance change.'
+          } : previous);
+        }
+      }
       setSerialEvents(previous => [...previous.slice(-199), clock() + '  ' + event.device.toUpperCase() + '  ' + detail]);
       const eventAt = new Date(event.at || Date.now()).toISOString();
       const role = event.device === 'uno' ? 'UNO' as const : 'SENTINEL' as const;
@@ -275,17 +311,6 @@ export default function App() {
     });
   }, [boards, nowMs]);
 
-  const replayScenario = (scenario: SyntheticScenario) => {
-    const replay = replaySyntheticScenario(scenario,
-      'fixture-' + scenario.scenarioId + '-' + Date.now().toString(36), new Date().toISOString());
-    setScenarioRuns(previous => [...previous, replay]);
-    setResearchRun(previous => reduceResearchRun(previous, {
-      type: 'APP_EVENT', role: 'LAB', kind: 'SCENARIO_REPLAY',
-      detail: scenario.scenarioId + '@v' + scenario.version + ' completed in isolated software-only replay.',
-      provenance: 'HOST_DERIVED'
-    }));
-  };
-
   useEffect(() => {
     const handler = (event: Event) => {
       const custom = event as CustomEvent<View>;
@@ -320,7 +345,6 @@ export default function App() {
       product: 'SENTINEL Research Environment', schemaVersion: 1, exportedAt: new Date().toISOString(),
       mode: state.mode,
       researchRun: JSON.parse(researchRunToJson(researchRun)),
-      syntheticScenarioRuns: scenarioRuns.map(run => JSON.parse(researchRunToJson(run))),
       hilVirtualCashShadow: hilShadow,
       evidenceProvenance: 'MIXED: simulated software state plus board-reported USB console text; no cryptographic hardware attestation',
       researchLimit: 'Virtual ATM only. No real cash, bank connection, or physical dispenser.',
@@ -342,7 +366,6 @@ export default function App() {
     const csvRows = [
       ...state.events.map(item => [item.at,item.id,item.severity,item.source,item.title,item.detail].map(csvCell).join(',')),
       ...researchRun.events.map(item => [item.at,item.eventId,item.kind === 'HIL_FROZEN' || item.kind === 'TRANSACTION_MISMATCH' ? 'critical' : 'info',item.role,item.kind,'[' + item.provenance + '] ' + item.detail].map(csvCell).join(',')),
-      ...scenarioRuns.flatMap(run => run.events.map(item => [item.at,item.eventId,'info','LAB',item.kind,'[' + item.provenance + '] ' + item.detail].map(csvCell).join(','))),
       ...serialEvents.slice(-200).map((line,index) => {
         const parts = line.split(/\s+/);
         const time = parts[0] || '';
@@ -416,11 +439,48 @@ export default function App() {
   const sendHilUnoCommand = async (command: UnoOperatorCommand) => {
     const pairFresh = (device: DeviceKey) => boards[device].connected && boards[device].readinessAt > 0 &&
       Date.now() - boards[device].readinessAt <= 3500 &&
-      boards[device].phase === (device === 'uno' ? 'HEALTHY' : 'OBSERVING');
+      boards[device].phase === (device === 'uno' ? 'HEALTHY' : 'OBSERVING') &&
+      Boolean(boards[device].sessionId);
     if (researchRun.mode !== 'HIL' || researchRun.phase !== 'ACTIVE' || !pairFresh('uno') || !pairFresh('sentinel')) {
-      return { ok: false, error: 'Typed HIL command denied: active HIL mode and fresh paired readiness are required.' };
+      return { ok: false, error: 'Hardware command denied: both boards must be connected, fresh, and ready. USB connection alone is not readiness.' };
     }
     return sendTypedBoardCommand('uno', command);
+  };
+
+  const boardFreshReady = (device: DeviceKey) => boards[device].connected &&
+    boards[device].readinessAt > 0 && nowMs - boards[device].readinessAt <= 3500 &&
+    boards[device].phase === (device === 'uno' ? 'HEALTHY' : 'OBSERVING') &&
+    Boolean(boards[device].sessionId);
+  const pairedHardwareReady = boardFreshReady('uno') && boardFreshReady('sentinel');
+  const guardianDisplayState = boards.sentinel.phase === 'REVOKED'
+    ? 'GUARDIAN REVOCATION LATCHED'
+    : pairedHardwareReady ? 'SENTINEL LINK LIVE' : 'SENTINEL NOT READY';
+
+  const runHardwareAttack = async () => {
+    if (!pairedHardwareReady || researchRun.mode !== 'HIL' || researchRun.phase !== 'ACTIVE') {
+      setAttackDemo({
+        ...initialHardwareAttack, phase: 'error', startedAt: Date.now(),
+        detail: 'Attack blocked. Connect both boards and wait for a fresh UNO HEALTHY report plus ESP32 OBSERVING report before retrying.'
+      });
+      return;
+    }
+    setAttackDemo({
+      phase: 'sending', startedAt: Date.now(),
+      detail: 'Writing FIXTURE_MISMATCH to the connected UNO. The app is now waiting for the UNO and ESP32 consoles to report what actually happened.',
+      unoEvidence: '', sentinelEvidence: '', controllerEvidence: ''
+    });
+    const result = await sendHilUnoCommand({ name: 'FIXTURE_MISMATCH', args: [] });
+    if (!result.ok) {
+      setAttackDemo(previous => previous.phase === 'sending' ? {
+        ...previous, phase: 'error', detail: result.error || 'The desktop could not write the fixture command.'
+      } : previous);
+      return;
+    }
+    setAttackDemo(previous => previous.phase === 'sending' ? {
+      ...previous,
+      phase: 'awaiting-uno',
+      detail: 'The desktop serial layer accepted the command write. This is not proof the UNO accepted it; waiting for a matching FIXTURE_SENT line from the physical board.'
+    } : previous);
   };
 
   return <div className="sentinel-os">
@@ -451,14 +511,14 @@ export default function App() {
         <div className="breadcrumbs"><span>SENTINEL</span><ChevronRight size={13} /><strong>{viewTitle(view)}</strong></div>
         <div className="titlebar-status">
           <span className="status-chip"><i /> LOCAL DOMAIN CORE</span>
-          <span className={'status-chip ' + (state.sentinelStatus === 'AUTHORITY REVOKED' ? 'critical-chip' : 'safe-chip')}><ShieldCheck size={13} /> {state.sentinelStatus}</span>
+          <span className={'status-chip ' + (boards.sentinel.phase === 'REVOKED' ? 'critical-chip' : pairedHardwareReady ? 'safe-chip' : '')}><ShieldCheck size={13} /> {guardianDisplayState}</span>
         </div>
       </header>
       <div className="page-body">
-        {view === 'terminal' && <TerminalView state={state} dispatch={dispatch} onRunSecurityDemo={runGuidedSecurityDemo} onNavigate={navigateTo} />}
+        {view === 'terminal' && <TerminalView state={state} dispatch={dispatch} onNavigate={navigateTo} />}
         {view === 'machine' && <MachineView state={state} boards={boards} />}
         {view === 'sentinel' && <SentinelView state={state} boards={boards} />}
-        {view === 'experiments' && <>{securityRunPhase !== 'idle' && <GuidedRunProgress phase={securityRunPhase} onReplay={runGuidedSecurityDemo} />}<ExperimentView state={state} dispatch={dispatch} /><ResearchRunPanel run={researchRun} scenarioRuns={scenarioRuns} onReplay={replayScenario} /></>}
+        {view === 'experiments' && <ExperimentView boards={boards} pairReady={pairedHardwareReady} attackDemo={attackDemo} nowMs={nowMs} onNavigate={navigateTo} onRunAttack={runHardwareAttack} researchMode={researchRun.mode} researchPhase={researchRun.phase} serialEvents={serialEvents} />}
         {view === 'journal' && <JournalView events={combinedJournalEvents} alerts={alerts} onExport={exportEvidence} researchRun={researchRun} />}
         {view === 'hardware' && <HardwareView ports={ports} chosenPort={chosenPort} setChosenPort={setChosenPort} boards={boards} message={portMessage} serialEvents={serialEvents} refresh={refreshPorts} connect={connectBoard} disconnect={disconnectBoard} sendCommand={sendBoardCommand} sendTypedCommand={sendHilUnoCommand} researchMode={researchRun.mode} researchPhase={researchRun.phase} hilShadow={hilShadow} hilTransaction={hilTransaction} boardBootEpochs={boardBootEpochs} hilFaultResetBaseline={hilFaultResetBaseline} nowMs={nowMs} clearHilTransaction={() => { setHilTransaction(null); setHilTransactionStartedAt(null); setHilFaultResetBaseline(null); }} />}
         <footer className="status-footer"><span><i /> DOMAIN CORE ACTIVE</span><span>{eventCount.toString().padStart(3,'0')} EVENTS · {alerts.toString().padStart(2,'0')} ALERTS</span><span>OFFLINE ATM SIMULATOR · SECURITY RESEARCH ENVIRONMENT</span></footer>
@@ -485,24 +545,8 @@ function PanelTitle({ icon, title, suffix }: { icon: ReactNode; title: string; s
   return <div className="panel-title"><span>{icon}{title}</span>{suffix && <small>{suffix}</small>}</div>;
 }
 
-function GuidedRunProgress({ phase, onReplay }: { phase: 'initializing' | 'inspecting' | 'revoking' | 'secured'; onReplay: () => void }) {
-  const steps = [
-    { id: 'initializing', label: 'Initialize protected ATM', detail: 'Resetting the local scenario and enabling the protected policy path.' },
-    { id: 'inspecting', label: 'Inspect controller evidence', detail: 'Evaluating profile, privileged path, sequence, heartbeat, freshness and state-transition signals.' },
-    { id: 'revoking', label: 'Evaluate and revoke authority', detail: 'The scenario evidence has been submitted to the security engine; the authority decision is being presented.' },
-    { id: 'secured', label: 'Verify dispenser gate', detail: 'Review the resulting decision and confirm the virtual dispense is blocked.' }
-  ];
-  const activeIndex = steps.findIndex(step => step.id === phase);
-  return <section className={'guided-run-panel ' + (phase === 'secured' ? 'guided-run-complete' : '')} aria-live="polite">
-    <div className="guided-run-heading"><span className="guided-run-orb"><Activity size={19} /></span><div><div className="guided-run-kicker">SENTINEL LIVE SEQUENCE · SOFTWARE SIMULATION</div><h2>{phase === 'secured' ? 'Security sequence complete' : phase === 'revoking' ? 'Security decision in progress' : phase === 'inspecting' ? 'Inspecting controller telemetry' : 'Initializing protected environment'}</h2></div><span className={'guided-run-state ' + (phase === 'secured' ? 'complete' : '')}><i />{phase === 'secured' ? 'COMPLETE' : 'RUNNING'}</span></div>
-    <div className="guided-run-track">{steps.map((step, index) => <div key={step.id} className={'guided-run-step ' + (index < activeIndex ? 'done' : index === activeIndex ? 'active' : '')}><span className="guided-run-step-marker">{index < activeIndex ? '✓' : String(index + 1).padStart(2, '0')}</span><div><strong>{step.label}</strong><small>{step.detail}</small></div>{index === activeIndex && phase !== 'secured' && <span className="guided-run-spinner" aria-label="Processing" />}</div>)}</div>
-    <div className="guided-run-footer"><span><i /> LOCAL POLICY ENGINE</span><span>{phase === 'secured' ? 'Review findings below · no physical cash or bank network involved' : 'Processing controlled scenario inputs · please wait'}</span>{phase === 'secured' && <button onClick={onReplay}><RotateCcw size={13} /> Run again</button>}</div>
-  </section>;
-}
-
-function TerminalView({ state, dispatch, onRunSecurityDemo, onNavigate }: { state: AtmState; dispatch: Dispatch<AtmAction>; onRunSecurityDemo: () => void; onNavigate: (view: View) => void }) {
+function TerminalView({ state, dispatch, onNavigate }: { state: AtmState; dispatch: Dispatch<AtmAction>; onNavigate: (view: View) => void }) {
   const [pinEntry, setPinEntry] = useState('');
-  const [helpOpen, setHelpOpen] = useState(true);
   useEffect(() => {
     if (state.screen !== 'pin') setPinEntry('');
   }, [state.screen]);
@@ -517,27 +561,15 @@ function TerminalView({ state, dispatch, onRunSecurityDemo, onNavigate }: { stat
   };
   const cancel = () => { setPinEntry(''); dispatch({ type: 'CANCEL_SESSION' }); };
   return <>
-    <ScreenHeading number="01" eyebrow="CUSTOMER ENVIRONMENT" title="ATM terminal" description={state.mode === "baseline" ? "SOFTWARE-ONLY UNPROTECTED BASELINE. Never controls connected hardware." : "Protected software simulation. Hardware-in-the-loop remains separate until the board bridge is qualified."} action={<button className="quiet-button" onClick={cancel}><RotateCcw size={14} /> End session</button>} />
-    <section className="presentation-banner" aria-label="Guided SENTINEL security demonstration">
-      <div className="presentation-banner-top"><span className="presentation-live"><i /> GUIDED SECURITY RUN</span><span className="presentation-id">SENTINEL / ATM-001</span></div>
+    <ScreenHeading number="01" eyebrow="CUSTOMER ENVIRONMENT" title="ATM terminal" description="Customer-facing ATM emulator. For the live security demonstration, use Experiment Lab after both physical boards report fresh readiness." />
+    <section className="presentation-banner" aria-label="SENTINEL hardware demonstration">
+      <div className="presentation-banner-top"><span className="presentation-live"><i /> HARDWARE-LED DEMONSTRATION</span><span className="presentation-id">UNO + ESP32 · LOCAL</span></div>
       <div className="presentation-banner-body">
-        <div className="presentation-copy"><div className="presentation-eyebrow">ATM SECURITY · CONTROLLED SCENARIO</div><h2>See the protection sequence.</h2><p>Run a repeatable controller-compromise scenario and follow the evidence, authority decision, and dispenser outcome in one connected workspace.</p>
-          <div className="presentation-steps"><span><b>01</b> Detect anomaly</span><span><b>02</b> Revoke authority</span><span><b>03</b> Block dispense</span></div>
+        <div className="presentation-copy"><div className="presentation-eyebrow">LIVE SERIAL EVIDENCE · CONTROLLED FIXTURE</div><h2>Watch the real boards respond.</h2><p>Connect the Arduino UNO and ESP32 in Hardware Bench. The lab unlocks the attack control only after both boards report fresh readiness, then animates each stage from their actual console events.</p>
+          <div className="presentation-steps"><span><b>01</b> Pair hardware</span><span><b>02</b> Inject test fixture</span><span><b>03</b> Observe revocation</span></div>
         </div>
-        <button className="presentation-launch" onClick={onRunSecurityDemo}><span className="presentation-launch-icon"><ShieldCheck size={19} /></span><span><strong>Run security sequence</strong><small>Open the live result view</small></span><ArrowRight size={17} /></button>
+        <button className="presentation-launch" onClick={() => onNavigate('experiments')}><span className="presentation-launch-icon"><ShieldCheck size={19} /></span><span><strong>Open live attack lab</strong><small>No scenario starts automatically</small></span><ArrowRight size={17} /></button>
       </div>
-    </section>
-    <section className="quick-start-panel" aria-label="How to use SENTINEL">
-      <button className="quick-start-toggle" aria-expanded={helpOpen} onClick={() => setHelpOpen(value => !value)}>
-        <span className="quick-start-book"><BookOpen size={17} /></span>
-        <span className="quick-start-toggle-copy"><strong>New here? Start with this 30-second guide.</strong><small>Know what to click and what each workspace is for.</small></span>
-        <span className="quick-start-toggle-action">{helpOpen ? 'HIDE GUIDE' : 'SHOW GUIDE'} <ChevronRight size={14} className={helpOpen ? 'guide-chevron open' : 'guide-chevron'} /></span>
-      </button>
-      {helpOpen && <div className="quick-start-content">
-        <div className="quick-start-step"><span>1</span><div><strong>Run the guided security sequence</strong><p>Best first step. Watch the staged incident, then read the outcome in the Experiment Lab.</p><button onClick={onRunSecurityDemo}>Start guided run <ArrowRight size={13} /></button></div></div>
-        <div className="quick-start-step"><span>2</span><div><strong>Explore the three useful workspaces</strong><p><b>ATM terminal</b> is the customer screen. <b>SENTINEL monitor</b> shows security state. <b>Event journal</b> shows recorded evidence.</p><div className="quick-start-links"><button onClick={() => onNavigate('terminal')}>ATM terminal</button><button onClick={() => onNavigate('sentinel')}>SENTINEL monitor</button><button onClick={() => onNavigate('journal')}>Event journal</button></div></div></div>
-        <div className="quick-start-step"><span>3</span><div><strong>Only connect hardware when you mean to</strong><p>The Hardware workspace is optional. You can learn and run the software scenario without connecting either board. Hardware results are separate from simulator results.</p><button className="quick-start-secondary" onClick={() => onNavigate('hardware')}>Open hardware workspace <ArrowRight size={13} /></button></div></div>
-      </div>}
     </section>
     <div className="terminal-layout">
       <section className="terminal-hardware">
@@ -551,7 +583,7 @@ function TerminalView({ state, dispatch, onRunSecurityDemo, onNavigate }: { stat
             {state.screen === 'amount' && <div className="customer-screen amount-screen"><div className="screen-kicker">{state.service === 'transfer' ? 'LOCAL TRANSFER DEMONSTRATION' : 'CASH WITHDRAWAL'}</div><h2>{state.service === 'transfer' ? 'Transfer amount' : 'Select an amount'}</h2><p>{state.service === 'transfer' ? 'Fictional beneficiary DEMO-2042; no network is used.' : 'Amount is checked against account and cassette state.'}</p><div className="amount-grid">{[500,1000,2000,5000].map(amount => <button key={amount} onClick={() => dispatch({ type: 'SELECT_AMOUNT', amount })} className={state.selectedAmount === amount ? 'amount-pick selected' : 'amount-pick'}>{money(amount)}</button>)}</div><div className="amount-selected"><span>SELECTED AMOUNT</span><strong>{money(state.selectedAmount)}</strong></div><button className="primary-action" onClick={() => dispatch({ type: 'CONFIRM_AMOUNT' })}>{state.service === 'transfer' ? 'Confirm local transfer' : 'Create withdrawal request'} <ArrowRight size={15} /></button><button className="screen-link" onClick={() => dispatch({ type: 'RETURN_TO_MENU' })}>Back to services</button></div>}
             {state.screen === 'pending' && <div className="customer-screen amount-screen"><div className="screen-kicker">VIRTUAL DISPENSER / AUTHORITY CHECK</div><h2>Withdrawal pending</h2><p>No account or cassette values change until the final gate succeeds.</p><div className="amount-selected"><span>TRANSACTION</span><strong>{state.pendingWithdrawal?.id ?? 'UNKNOWN'}</strong></div><div className="amount-selected"><span>REQUESTED AMOUNT</span><strong>{money(state.pendingWithdrawal?.amount ?? 0)}</strong></div><div className="amount-selected"><span>AUTHORITY</span><strong>{state.lastDecision}</strong></div>{!state.simulationPermit && state.mode === 'protected' && state.sentinelStatus !== 'AUTHORITY REVOKED' && <button className="primary-action" onClick={() => dispatch({ type: 'AUTHORIZE_PENDING_WITHDRAWAL' })}>Evaluate Sentinel policy <ShieldCheck size={15} /></button>}{state.mode === 'baseline' && !state.simulationPermit && <p className="muted-note">Baseline mode deliberately omits the independent guardian; this software-only comparison must never control hardware.</p>}{(state.mode === 'baseline' || state.simulationPermit) && <button className="primary-action" onClick={() => dispatch({ type: 'COMMIT_PENDING_WITHDRAWAL' })}>{state.mode === 'baseline' ? 'Run unprotected baseline dispense' : 'Pass final virtual-dispenser gate'} <ArrowRight size={15} /></button>}{state.simulationPermit && <p className="muted-note">SIMULATED permit expires at {new Date(state.simulationPermit.expiresAtMs).toLocaleTimeString('en-IN')} and applies only to this transaction.</p>}<button className="screen-link" onClick={() => dispatch({ type: 'CANCEL_PENDING_WITHDRAWAL' })}>Cancel pending withdrawal</button></div>}
             {state.screen === 'statement' && <div className="customer-screen statement-screen"><div className="screen-kicker">ACCOUNT ACTIVITY</div><h2>Mini statement</h2><p>Recent synthetic transactions</p>{state.transactions.length === 0 ? <div className="no-transactions">No transactions in this demo session.</div> : <div className="statement-lines">{[...state.transactions].reverse().slice(0,5).map(txn => <div key={txn.id}><span>{txn.type.toUpperCase()}<small>{txn.reference}</small></span><strong>{txn.amount ? money(txn.amount) : 'INQUIRY'}</strong></div>)}</div>}<button className="primary-action" onClick={() => dispatch({ type: 'RETURN_TO_MENU' })}>Return to menu <ArrowRight size={15} /></button></div>}
-            {state.screen === 'receipt' && <div className="customer-screen receipt-screen"><div className="receipt-mark"><CheckCircle2 size={24} /></div><div className="screen-kicker">TERMINAL RESPONSE</div><h2>Transaction result</h2><pre>{state.receiptMessage || 'Request completed.'}</pre>{state.service === 'balance' && <div className="balance-readout"><span>AVAILABLE BALANCE</span><strong>{money(state.accountBalance)}</strong></div>}<button className="primary-action" onClick={() => dispatch({ type: 'RETURN_TO_MENU' })}>Return to menu <ArrowRight size={15} /></button><button className="screen-link" onClick={cancel}>End session</button></div>}
+            {state.screen === 'receipt' && <div className="customer-screen receipt-screen"><div className="receipt-mark"><CheckCircle2 size={24} /></div><div className="screen-kicker">TERMINAL RESPONSE</div><h2>Transaction result</h2><pre>{state.receiptMessage || 'Request completed.'}</pre>{state.service === 'balance' && <div className="balance-readout"><span>AVAILABLE BALANCE</span><strong>{money(state.accountBalance)}</strong></div>}<button className="primary-action" onClick={() => dispatch({ type: 'RETURN_TO_MENU' })}>Return to menu <ArrowRight size={15} /></button><button className="screen-link" onClick={cancel}>Return to welcome screen</button></div>}
             {state.screen === 'locked' && <div className="customer-screen incident-screen"><div className="incident-icon"><LockKeyhole size={27} /></div><div className="screen-kicker danger-text">SESSION LOCKED</div><h2>Verification failed</h2><p>The test account reached its configured retry limit.</p><button className="primary-action" onClick={cancel}>Return card <ArrowRight size={15} /></button></div>}
             {state.screen === 'lockdown' && <div className="customer-screen incident-screen"><div className="incident-icon"><ShieldAlert size={28} /></div><div className="screen-kicker danger-text">SENTINEL LOCKDOWN</div><h2>Dispensing blocked</h2><p>The independent authority gate revoked controller permission. No further protected withdrawal can be completed until the experiment is reset.</p><div className="lockdown-stamp">AUTHORITY REVOKED</div><button className="screen-link" onClick={() => window.dispatchEvent(new CustomEvent('sentinel:navigate', { detail: 'experiments' }))}>Open experiment controls</button></div>}
           </div>
@@ -607,51 +639,108 @@ function SentinelView({ state, boards }: { state: AtmState; boards: Record<Devic
   </>;
 }
 
-function ExperimentView({ state, dispatch }: { state: AtmState; dispatch: Dispatch<AtmAction> }) {
-  const blocked = state.mode === 'protected' && state.lastDecision === 'REVOKE';
-  const baselineReleased = state.mode === 'baseline' && state.scenarioApplied;
-  return <>
-    <ScreenHeading number="04" eyebrow="CONTROLLED SECURITY EXPERIMENT" title="Baseline vs protected" description="The fixture supplies inputs; the rule engine evaluates them; the virtual dispenser gate determines the outcome." action={<button className="quiet-button" onClick={() => dispatch({ type: 'RESET_SCENARIO' })}><RotateCcw size={14} /> Reset run</button>} />
-    <div className="experiment-mode-switch"><button className={'experiment-mode baseline ' + (state.mode === 'baseline' ? 'selected' : '')} onClick={() => dispatch({ type: 'SET_MODE', mode: 'baseline' })}><LockKeyhole size={18} /><span><strong>Unprotected baseline</strong><small>Independent gate intentionally bypassed in this virtual comparison.</small></span></button><button className={'experiment-mode protected ' + (state.mode === 'protected' ? 'selected' : '')} onClick={() => dispatch({ type: 'SET_MODE', mode: 'protected' })}><ShieldCheck size={18} /><span><strong>SENTINEL active</strong><small>Policy findings revoke authority and the virtual gate enforces denial.</small></span></button></div>
-    <section className="scenario-card"><div className="scenario-meta"><span>FIXTURE S-001</span><span className="simulated-label">CONTROLLED SCENARIO INPUTS</span></div><div className="scenario-main"><div className="scenario-symbol"><Fingerprint size={29} /></div><div className="scenario-copy"><h2>Controller compromise / unauthorized dispense</h2><p>The controlled scenario introduces a reported-profile mismatch, out-of-window privileged path, sequence divergence, stale heartbeat/frame and an illegal transition. The same policy path is evaluated on every run.</p><div className="scenario-tags"><span>CONTROLLER INTEGRITY</span><span>DISPENSER AUTHORITY</span><span>REPEATABLE</span></div></div></div><div className="scenario-evidence">{['Reported profile mismatch','Privileged path outside maintenance','Control sequence divergence','Stale heartbeat and frame','Illegal controller transition'].map((item,index)=><div key={item}><span>{String(index+1).padStart(2,'0')}</span>{item}<b>TEST INPUT</b></div>)}</div><button className="run-scenario" onClick={() => dispatch({ type: 'RUN_COMPROMISE_SCENARIO' })} disabled={state.scenarioApplied}><Fingerprint size={17} /><span><strong>{state.scenarioApplied ? 'Scenario already applied' : 'Run controlled compromise scenario'}</strong><small>{state.scenarioApplied ? 'Reset the experiment to replay the same fixture.' : 'The button injects evidence; it does not choose the verdict.'}</small></span><ArrowRight size={17} /></button></section>
-    <div className="results-grid"><section className="result-panel"><div className="result-head"><span>VIRTUAL DISPENSER RESULT</span><b className={blocked || baselineReleased ? 'red-text' : 'green-text'}>{blocked ? 'BLOCKED' : baselineReleased ? 'UNAUTHORIZED DISPENSE' : 'READY'}</b></div><strong className="result-number">{money(state.dispensedTotal)}</strong><small>Virtual cash released in this run</small><div className="result-foot"><span>Cassette cash remaining</span><b>{money(state.cassetteCash)}</b></div></section><section className="result-panel"><div className="result-head"><span>SENTINEL DECISION</span><b>{state.lastDecision}</b></div><strong className="result-number">{state.findings.length}</strong><small>Findings in active run</small><div className="result-foot"><span>Controller state</span><b className={state.controllerState === 'COMPROMISED' ? 'red-text' : ''}>{state.controllerState}</b></div></section></div>
-    <div className="scientific-note"><CircleAlert size={16} /><p>This fixture validates only the configured model. It cannot prove detection of arbitrary real firmware compromise, and the virtual gate is not a physical cash-dispenser interlock.</p></div>
-    {state.findings.length > 0 && <section className="finding-panel"><h3>Policy findings</h3>{state.findings.map((finding,index)=><p key={finding}><span>{String(index+1).padStart(2,'0')}</span>{finding}</p>)}</section>}
-  </>;
-}
-
-function ResearchRunPanel({ run, scenarioRuns, onReplay }: {
-  run: ResearchRunRecord;
-  scenarioRuns: ResearchRunRecord[];
-  onReplay: (scenario: SyntheticScenario) => void;
+function ExperimentView({ boards, pairReady, attackDemo, nowMs, onNavigate, onRunAttack, researchMode, researchPhase, serialEvents }: {
+  boards: Record<DeviceKey, BoardState>;
+  pairReady: boolean;
+  attackDemo: HardwareAttackState;
+  nowMs: number;
+  onNavigate: (view: View) => void;
+  onRunAttack: () => void;
+  researchMode: ResearchRunRecord['mode'];
+  researchPhase: ResearchRunRecord['phase'];
+  serialEvents: string[];
 }) {
+  const [guideOpen, setGuideOpen] = useState(true);
+  const unoHit = Boolean(attackDemo.unoEvidence) || ['fixture-injected', 'guardian-revoked', 'controller-locked'].includes(attackDemo.phase);
+  const guardianRevoked = Boolean(attackDemo.sentinelEvidence) || ['guardian-revoked', 'controller-locked'].includes(attackDemo.phase) || boards.sentinel.phase === 'REVOKED';
+  const attackPending = ['sending', 'awaiting-uno', 'fixture-injected', 'guardian-revoked'].includes(attackDemo.phase);
+  const canAttack = pairReady && researchMode === 'HIL' && researchPhase === 'ACTIVE' && !attackPending;
+  const phaseLabel: Record<HardwareAttackPhase, string> = {
+    idle: 'WAITING FOR OPERATOR',
+    sending: 'WRITING FIXTURE COMMAND',
+    'awaiting-uno': 'AWAITING UNO EVIDENCE',
+    'fixture-injected': 'UNO FIXTURE CONFIRMED',
+    'guardian-revoked': 'ESP32 REVOCATION OBSERVED',
+    'controller-locked': 'UNO GUARDIAN LOCK OBSERVED',
+    error: 'EVIDENCE INCOMPLETE'
+  };
+  const progress = [
+    { key: 'pair', title: 'Live pair ready', detail: 'UNO HEALTHY + ESP32 OBSERVING', done: pairReady },
+    { key: 'uno', title: 'UNO reports fixture', detail: 'ATM_EVENT · FIXTURE_SENT', done: unoHit },
+    { key: 'esp', title: 'ESP32 reports revocation', detail: '[REVOKE] / mode=REVOKED', done: guardianRevoked },
+    { key: 'lock', title: 'UNO reports guardian lock', detail: 'Board-reported lock response', done: attackDemo.phase === 'controller-locked' }
+  ];
+  const boardStatus = (device: DeviceKey) => {
+    const board = boards[device];
+    if (!board.connected) return 'USB DISCONNECTED';
+    if (board.phase === 'REVOKED') return 'REVOCATION LATCHED';
+    if (device === 'uno' && board.phase === 'HEALTHY') return 'LINK HEALTHY';
+    if (device === 'sentinel' && board.phase === 'OBSERVING') return 'GUARDIAN ACTIVE';
+    return board.phase;
+  };
   return <>
-    <section className="data-panel">
-      <PanelTitle icon={<Activity size={16} />} title="RESEARCH SESSION COORDINATOR" suffix={`SCHEMA V${run.schemaVersion}`} />
-      <div className="authority-row"><span>Active run</span><b>{run.runId}</b></div>
-      <div className="authority-row"><span>Execution mode</span><b>{run.mode}</b></div>
-      <div className="authority-row"><span>Coordinator state</span><b className={run.phase === 'FROZEN' ? 'red-text' : 'green-text'}>{run.phase}</b></div>
-      <div className="authority-row"><span>Exactly-once correlated commits</span><b>{run.correlatedCommitCount}</b></div>
-      <p className="muted-note">The same run ledger receives ATM simulation events, parsed board evidence, HIL transaction correlation, experiment replay results and journal/export records. Board-reported evidence is not cryptographic attestation.</p>
-      {run.freezeReason && <div className="hardware-notice"><CircleAlert size={16} /><p>HIL frozen: {run.freezeReason}</p></div>}
-    </section>
-    <section className="data-panel">
-      <PanelTitle icon={<Fingerprint size={16} />} title="VERSIONED SOFTWARE-ONLY REPLAY" suffix="NO HARDWARE COMMANDS" />
-      <p className="muted-note">These deterministic fixtures run in an isolated software-only record. They never invoke the serial bridge, and their board-like events are labelled SYNTHETIC_FIXTURE.</p>
-      <div className="service-list">
-        {SYNTHETIC_SCENARIOS.map(scenario => {
-          const latest = scenarioRuns.find(item => item.runId.startsWith('fixture-' + scenario.scenarioId + '-'));
-          return <div className="service-button" key={scenario.scenarioId}>
-            <span className="service-icon"><Fingerprint size={17} /></span>
-            <span><strong>{scenario.title} · v{scenario.version}</strong><small>{scenario.description}</small>{latest && <small>Latest: {latest.phase} · shadow updates {latest.correlatedCommitCount}</small>}</span>
-            <button className="board-button" onClick={() => onReplay(scenario)}>Replay</button>
-          </div>;
-        })}
+    <ScreenHeading number="04" eyebrow="LIVE HARDWARE EXPERIMENT" title="Attack → detect → revoke" description="This lab sends a labelled test fixture to the connected Arduino UNO. Every stage advances only when the app sees corresponding board-reported serial evidence." action={<span className={'decision-pill ' + (guardianRevoked ? 'danger' : pairReady ? 'safe' : '')}>{pairReady ? 'PAIRED HARDWARE READY' : guardianRevoked ? 'REVOCATION LATCHED' : 'PAIR NOT READY'}</span>} />
+    <section className={'hardware-demo-shell phase-' + attackDemo.phase + (pairReady ? ' pair-ready' : '') + (unoHit ? ' uno-compromised' : '') + (guardianRevoked ? ' guardian-revoked' : '')}>
+      <div className="hardware-demo-topline">
+        <div><span className="hardware-demo-eyebrow">SENTINEL · REAL SERIAL PATH</span><h2>{guardianRevoked ? 'Guardian intervention reported' : unoHit ? 'Integrity fixture detected on the controller path' : pairReady ? 'Both boards are reporting ready' : 'Connect the hardware pair to begin'}</h2></div>
+        <span className={'hardware-phase-badge ' + (guardianRevoked ? 'is-danger' : unoHit ? 'is-warning' : pairReady ? 'is-ready' : '')}><i />{phaseLabel[attackDemo.phase]}</span>
       </div>
-      <div className="authority-row"><span>Saved synthetic runs</span><b>{scenarioRuns.length}</b></div>
-      {scenarioRuns.length > 0 && <div className="serial-log">{scenarioRuns.slice(-5).reverse().map(item =>
-        <p key={item.runId}><strong>{item.runId}</strong> · {item.phase} · {item.correlatedCommitCount} shadow update(s) · {item.events.length} events · SOFTWARE_ONLY</p>
-      )}</div>}
+      <p className="hardware-demo-lede">{attackDemo.detail}</p>
+      <div className="hardware-scene" aria-label="Animated hardware attack path">
+        <div className={'hardware-node uno-node ' + (unoHit ? 'node-compromised' : pairReady ? 'node-live' : '')}>
+          <div className="node-halo" /><div className="node-top"><span className="node-port">USB / UNO</span><span className="node-state">{boardStatus('uno')}</span></div>
+          <div className="node-emblem"><Cpu size={29} /></div>
+          <strong>Arduino UNO</strong><small>PRIMARY ATM CONTROLLER</small>
+          <div className="node-meter"><i /></div>
+          <p>{unoHit ? 'Integrity fixture sent by the physical controller firmware.' : 'Customer and withdrawal logic. Receives the test command through its real USB serial port.'}</p>
+          <span className="node-foot">{boards.uno.connected ? boards.uno.path || 'USB PORT OPEN' : 'CONNECT IN HARDWARE BENCH'}</span>
+        </div>
+        <div className={'hardware-link-stage ' + (attackDemo.phase === 'sending' || attackDemo.phase === 'awaiting-uno' ? 'host-transmitting' : '') + (unoHit ? ' peer-transmitting' : '') + (guardianRevoked ? ' revoke-transmitting' : '')}>
+          <div className="link-labels"><span>DESKTOP → UNO</span><span>UNO ⇄ ESP32 · UART V3</span></div>
+          <div className="link-lane host-lane"><i className="signal-packet" /><i className="signal-packet packet-second" /></div>
+          <div className="link-lane peer-lane"><i className="signal-packet" /><i className="signal-packet packet-second" /></div>
+          <div className="link-state">{guardianRevoked ? 'REVOKE REPORTED' : unoHit ? 'FIXTURE SENT · WAITING FOR GUARDIAN' : pairReady ? 'LINK READY · AWAITING OPERATOR' : 'NO QUALIFIED PAIR'}</div>
+        </div>
+        <div className={'hardware-node sentinel-node ' + (guardianRevoked ? 'node-revoked' : pairReady ? 'node-live' : '')}>
+          <div className="node-halo" /><div className="node-top"><span className="node-port">USB / ESP32</span><span className="node-state">{boardStatus('sentinel')}</span></div>
+          <div className="node-emblem"><ShieldCheck size={29} /></div>
+          <strong>ESP32 SENTINEL</strong><small>INDEPENDENT GUARDIAN</small>
+          <div className="node-meter"><i /></div>
+          <p>{guardianRevoked ? 'Actual ESP32 console reported a latched revocation.' : pairReady ? 'Live guardian observation is ready. Green means fresh OBSERVING telemetry was received.' : 'Connect the guardian and wait for fresh OBSERVING telemetry.'}</p>
+          <span className="node-foot">{boards.sentinel.connected ? boards.sentinel.path || 'USB PORT OPEN' : 'CONNECT IN HARDWARE BENCH'}</span>
+        </div>
+      </div>
+      <div className="hardware-run-controls">
+        <div className="hardware-ready-checks">
+          <div className={boards.uno.connected && boards.uno.phase === 'HEALTHY' && nowMs - boards.uno.readinessAt <= 3500 ? 'ready-check complete' : 'ready-check'}><i /> <span><strong>UNO</strong><small>{boards.uno.connected ? boards.uno.phase : 'Not connected'}</small></span></div>
+          <div className={boards.sentinel.connected && boards.sentinel.phase === 'OBSERVING' && nowMs - boards.sentinel.readinessAt <= 3500 ? 'ready-check complete' : 'ready-check'}><i /> <span><strong>ESP32</strong><small>{boards.sentinel.connected ? boards.sentinel.phase : 'Not connected'}</small></span></div>
+          <div className={pairReady && researchMode === 'HIL' && researchPhase === 'ACTIVE' ? 'ready-check complete' : 'ready-check'}><i /> <span><strong>Paired session</strong><small>{pairReady && researchMode === 'HIL' ? 'Ready for protected command' : 'Awaiting both fresh readiness reports'}</small></span></div>
+        </div>
+        <button className="hardware-connect-button" onClick={() => onNavigate('hardware')}><Plug size={16} /> {pairReady ? 'View hardware connection' : 'Connect Arduino + ESP32'} <ArrowRight size={15} /></button>
+        <button className="hardware-attack-button" onClick={onRunAttack} disabled={!canAttack}><ShieldAlert size={18} /><span><strong>{canAttack ? 'Inject controlled attack fixture' : attackPending ? 'Waiting for board evidence…' : 'Attack locked until pair is ready'}</strong><small>{canAttack ? 'Sends FIXTURE_MISMATCH to the physical UNO. This is a labelled test input, not a real firmware hack.' : 'Requires connected boards, fresh readiness, and an active paired HIL session.'}</small></span><ArrowRight size={18} /></button>
+      </div>
+      <div className="hardware-evidence-timeline">
+        <div className="timeline-heading"><div><span className="hardware-demo-eyebrow">OBSERVATION TIMELINE</span><h3>What changed — based on board output</h3></div><span>{attackDemo.phase === 'idle' ? 'NOT STARTED' : attackDemo.phase === 'error' ? 'INCOMPLETE' : attackDemo.phase === 'controller-locked' ? 'BOARD LOCK REPORTED' : 'LIVE OBSERVATION'}</span></div>
+        <div className="hardware-timeline-steps">{progress.map((step, index) => <article className={'hardware-timeline-step ' + (step.done ? 'done' : '') + (index === 0 && pairReady ? ' active' : '')} key={step.key}><span className="timeline-index">{step.done ? '✓' : String(index + 1).padStart(2, '0')}</span><div><strong>{step.title}</strong><small>{step.detail}</small><p>{index === 0 ? 'The app requires two current readiness reports, not merely two open USB ports.' : index === 1 ? 'This line confirms the UNO firmware accepted the test command and marked the event SIMULATED.' : index === 2 ? 'This is the guardian decision observed from the ESP32 console, not a UI assumption.' : 'This confirms the UNO reported the peer guardian response. If absent, the path is not fully demonstrated.'}</p></div></article>)}</div>
+      </div>
+      <div className="hardware-proof-grid">
+        <section className="board-evidence-card"><div className="evidence-card-head"><span><Cpu size={15} /> UNO · BOARD OUTPUT</span><b className={attackDemo.unoEvidence ? 'evidence-seen' : ''}>{attackDemo.unoEvidence ? 'OBSERVED' : 'WAITING'}</b></div><pre>{attackDemo.unoEvidence || 'Waiting for ATM_EVENT|FIXTURE_SENT|source=SIMULATED from the connected UNO.'}</pre></section>
+        <section className="board-evidence-card"><div className="evidence-card-head"><span><ShieldCheck size={15} /> ESP32 · BOARD OUTPUT</span><b className={attackDemo.sentinelEvidence ? 'evidence-seen' : ''}>{attackDemo.sentinelEvidence ? 'OBSERVED' : 'WAITING'}</b></div><pre>{attackDemo.sentinelEvidence || 'Waiting for [REVOKE] or GUARDIAN_STATUS|mode=REVOKED from the connected ESP32.'}</pre></section>
+        {attackDemo.controllerEvidence && <section className="board-evidence-card full-evidence"><div className="evidence-card-head"><span><LockKeyhole size={15} /> UNO · GUARDIAN RESPONSE</span><b className="evidence-seen">OBSERVED</b></div><pre>{attackDemo.controllerEvidence}</pre></section>}
+      </div>
+      {attackDemo.phase === 'error' && <div className="hardware-demo-error"><CircleAlert size={17} /><p>{attackDemo.detail}</p></div>}
+      {attackDemo.phase === 'controller-locked' && <div className="hardware-demo-success"><ShieldCheck size={17} /><div><strong>Full board-reported sequence observed</strong><p>UNO fixture event → ESP32 revocation report → UNO guardian-lock report. The app did not change the virtual ATM balance to create this result.</p></div></div>}
+      <section className="how-it-works-panel">
+        <button className="how-it-works-toggle" aria-expanded={guideOpen} onClick={() => setGuideOpen(value => !value)}><span><Activity size={17} /><span><strong>How this demonstration works</strong><small>Read what each step does and exactly what counts as evidence.</small></span></span><ChevronRight size={16} className={guideOpen ? 'guide-open' : ''} /></button>
+        {guideOpen && <div className="how-it-works-grid">
+          <article><span>01 · CONNECT</span><h4>Establish a live pair</h4><p>In Hardware Bench, scan ports and connect the UNO and ESP32 to their correct ports. The lab unlocks only when the app has fresh UNO <code>HEALTHY</code> and ESP32 <code>OBSERVING</code> reports with session IDs. USB-open by itself is not enough.</p></article>
+          <article><span>02 · TRIGGER</span><h4>Inject a labelled test fixture</h4><p>The attack button writes <code>FIXTURE_MISMATCH</code> to the physical UNO. Its firmware sends a V3 peer event labelled <code>source=SIMULATED</code> and <code>event=PROFILE_MISMATCH</code>. This tests the real board-to-board path; it is not a claim that arbitrary malicious firmware was installed.</p></article>
+          <article><span>03 · DETECT</span><h4>Observe the guardian decision</h4><p>The ESP32 firmware is expected to report <code>[REVOKE]</code> and transmit a guardian revocation frame over UART. The green guardian glow means recent live observation; a red incident glow means the console reported revocation.</p></article>
+          <article><span>04 · VERIFY</span><h4>Wait for the controller response</h4><p>The UNO should report its guardian-lock response. If that line never appears, the final step stays unconfirmed. Evidence is read from serial output; the app does not fake a balance deduction or mark a stage complete by timer.</p></article>
+        </div>}
+      </section>
+      <section className="live-observation-panel"><div className="timeline-heading"><div><span className="hardware-demo-eyebrow">LATEST SERIAL OBSERVATIONS</span><h3>Live board telemetry</h3></div><span>{serialEvents.length} buffered lines</span></div><div className="live-observation-list">{serialEvents.slice(-8).reverse().map((line, index) => <p key={index} className={/REVOKE|SECURITY_LOCK|mode=REVOKED|FIXTURE_SENT/i.test(line) ? 'observation-alert' : ''}>{line}</p>)}{serialEvents.length === 0 && <p className="observation-empty">No board lines observed yet. Connect both devices in Hardware Bench; this feed only populates from the serial bridge.</p>}</div></section>
+      <div className="hardware-demo-footnote"><CircleAlert size={15} /><p><strong>Scope:</strong> this is a real connected-board test of a firmware-labelled simulated integrity event and the resulting UART response. It is not an actual exploitation attempt, not cryptographic attestation, and not a physical cash-dispenser interlock. No live bank or cash system is connected.</p></div>
     </section>
   </>;
 }
