@@ -15,7 +15,7 @@
 
 static const int PEER_RX_PIN = 16;
 static const int PEER_TX_PIN = 17;
-static const unsigned long PEER_BAUD = 9600;
+static const unsigned long PEER_BAUD = 4800;
 static const unsigned long USB_BAUD = 115200;
 static const unsigned long DEFAULT_HEARTBEAT_TIMEOUT_MS = 1800UL;
 static const unsigned long DEFAULT_LINK_TIMEOUT_MS = 2600UL;
@@ -54,7 +54,11 @@ uint32_t lastStatusAt = 0;
 // Defer HEALTHY until the Uno's SoftwareSerial transmitter has fully returned to receive mode.
 bool pendingHealthyStatus = false;
 uint32_t healthyStatusDueAt = 0;
+uint32_t healthyStatusSequence = 0;
+uint8_t healthyStatusAttempts = 0;
 static const uint32_t HEALTHY_STATUS_TURNAROUND_MS = 60UL;
+static const uint32_t HEALTHY_STATUS_RETRY_MS = 140UL;
+static const uint8_t HEALTHY_STATUS_MAX_ATTEMPTS = 3;
 uint32_t budgetWindowStartedAt = 0;
 uint32_t approvedWindowAmount = 0;
 uint32_t maxTransaction = DEFAULT_MAX_TRANSACTION;
@@ -115,6 +119,9 @@ bool validSession(const char *s) {
 }
 
 bool sendFrameAtSequence(const char *type, const char *payload, uint32_t seq) {
+  // A newer outbound decision supersedes pending HEALTHY retries. Never emit
+  // an older STATUS after a newer PERMIT, DENY, or REVOKE sequence.
+  if (strcmp(type, "STATUS") != 0) pendingHealthyStatus = false;
   if (seq == 0) {
     Serial.println(F("[FAULT] Sequence zero is invalid; guardian revoked."));
     mode = GUARDIAN_REVOKED;
@@ -343,9 +350,13 @@ void handleHeartbeat(const char *payload) {
   // Schedule a short, non-blocking turnaround so the Uno is listening again.
   if (!revokeLatched) {
     pendingHealthyStatus = true;
+    healthyStatusSequence = (txSequence == 0xFFFFFFFFUL) ? 0 : txSequence + 1UL;
+    healthyStatusAttempts = 0;
     healthyStatusDueAt = lastHeartbeatAt + HEALTHY_STATUS_TURNAROUND_MS;
     Serial.print(F("[STATUS_TX] HEALTHY scheduled; due_ms="));
-    Serial.println(healthyStatusDueAt);
+    Serial.print(healthyStatusDueAt);
+    Serial.print(F(" seq="));
+    Serial.println(healthyStatusSequence);
   }
 }
 
@@ -710,7 +721,7 @@ void setup() {
   Serial.println();
   Serial.println(F("SENTINEL ESP32 GUARDIAN V3 READY"));
   Serial.println(F("Claims: protocol/state policy observation only; no secure element or physical interlock."));
-  Serial.println(F("UART2: RX GPIO16 / TX GPIO17 / 9600 8N1"));
+  Serial.println(F("UART2: RX GPIO16 / TX GPIO17 / 4800 8N1"));
   Serial.println(F("Type HELP for local RAM policy commands."));
 }
 
@@ -719,25 +730,41 @@ void loop() {
   pollUsb();
   const uint32_t now = millis();
 
-  // Defer the STATUS response until after SoftwareSerial on the Uno has
-  // completed its blocking HEARTBEAT transmission and resumed RX listening.
+  // Defer STATUS until the Uno's SoftwareSerial transmitter has returned to
+  // receive mode. If a frame is corrupted/lost, retry the identical sequence
+  // a bounded number of times. The Uno ignores only exact, recent duplicates.
   if (pendingHealthyStatus &&
       (int32_t)(now - healthyStatusDueAt) >= 0) {
-    pendingHealthyStatus = false;
-    if (!revokeLatched && handshakeConfirmed) {
-      Serial.print(F("[STATUS_TX] Sending STATUS HEALTHY; next_seq="));
-      Serial.println(txSequence + 1UL);
-      const bool sent = sendFrame("STATUS", "HEALTHY");
+    if (!revokeLatched && handshakeConfirmed && healthyStatusSequence != 0) {
+      Serial.print(F("[STATUS_TX] Attempt "));
+      Serial.print((uint8_t)(healthyStatusAttempts + 1));
+      Serial.print('/');
+      Serial.print(HEALTHY_STATUS_MAX_ATTEMPTS);
+      Serial.print(F(" STATUS HEALTHY seq="));
+      Serial.println(healthyStatusSequence);
+      const bool sent = sendFrameAtSequence("STATUS", "HEALTHY", healthyStatusSequence);
       Serial.print(F("[STATUS_TX] sendFrame_return="));
       Serial.println(sent ? F("true") : F("false"));
       if (!sent) {
+        pendingHealthyStatus = false;
         revoke("Unable to transmit healthy guardian status.");
+      } else {
+        ++healthyStatusAttempts;
+        if (healthyStatusAttempts >= HEALTHY_STATUS_MAX_ATTEMPTS) {
+          pendingHealthyStatus = false;
+        } else {
+          healthyStatusDueAt = now + HEALTHY_STATUS_RETRY_MS;
+        }
       }
     } else {
+      pendingHealthyStatus = false;
       Serial.print(F("[STATUS_TX] Skipped; revoked="));
       Serial.print(revokeLatched ? F("yes") : F("no"));
       Serial.print(F(" handshake="));
       Serial.println(handshakeConfirmed ? F("yes") : F("no"));
+      if (!revokeLatched && handshakeConfirmed && healthyStatusSequence == 0) {
+        revoke("Unable to allocate healthy status sequence.");
+      }
     }
   }
 
