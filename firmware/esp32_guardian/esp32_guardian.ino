@@ -51,6 +51,10 @@ uint32_t duplicateUnoHelloCount = 0;
 uint32_t lastValidUnoAt = 0;
 uint32_t lastHeartbeatAt = 0;
 uint32_t lastStatusAt = 0;
+// Defer HEALTHY until the Uno's SoftwareSerial transmitter has fully returned to receive mode.
+bool pendingHealthyStatus = false;
+uint32_t healthyStatusDueAt = 0;
+static const uint32_t HEALTHY_STATUS_TURNAROUND_MS = 60UL;
 uint32_t budgetWindowStartedAt = 0;
 uint32_t approvedWindowAmount = 0;
 uint32_t maxTransaction = DEFAULT_MAX_TRANSACTION;
@@ -333,9 +337,14 @@ void handleHeartbeat(const char *payload) {
   }
   heartbeatSeen = true;
   lastHeartbeatAt = millis();
-  // Half-duplex turn-taking: answer only after the Uno has finished its heartbeat.
-  // Never advertise healthy status after this guardian has latched a revocation.
-  if (!revokeLatched) sendFrame("STATUS", "HEALTHY");
+  // Do not reply from inside the RX parser. The Uno uses SoftwareSerial, whose
+  // transmit path temporarily disables RX interrupts. A reply sent immediately
+  // after its final heartbeat byte can collide with the tail of that transmit.
+  // Schedule a short, non-blocking turnaround so the Uno is listening again.
+  if (!revokeLatched) {
+    pendingHealthyStatus = true;
+    healthyStatusDueAt = lastHeartbeatAt + HEALTHY_STATUS_TURNAROUND_MS;
+  }
 }
 
 void handleEvent(const char *payload) {
@@ -707,6 +716,18 @@ void loop() {
   pollUno();
   pollUsb();
   const uint32_t now = millis();
+
+  // Defer the STATUS response until after SoftwareSerial on the Uno has
+  // completed its blocking HEARTBEAT transmission and resumed RX listening.
+  if (pendingHealthyStatus &&
+      (int32_t)(now - healthyStatusDueAt) >= 0) {
+    pendingHealthyStatus = false;
+    if (!revokeLatched && handshakeConfirmed) {
+      if (!sendFrame("STATUS", "HEALTHY")) {
+        revoke("Unable to transmit healthy guardian status.");
+      }
+    }
+  }
 
   if (sessionEstablished && !heartbeatSeen && !revokeLatched) {
     // Keep the absolute deadline active until the first valid heartbeat proves
