@@ -12,7 +12,8 @@ import {
 type View = 'terminal' | 'machine' | 'sentinel' | 'experiments' | 'journal' | 'hardware';
 type DeviceKey = 'uno' | 'sentinel';
 type Port = { path: string; manufacturer?: string; vendorId?: string; productId?: string; serialNumber?: string };
-type BoardState = { connected: boolean; path: string; lastLine: string; error?: string };
+type BoardPhase = 'DISCONNECTED' | 'USB OPEN' | 'BOOTED' | 'NEGOTIATING' | 'HEALTHY' | 'OBSERVING' | 'REVOKED' | 'ERROR';
+type BoardState = { connected: boolean; path: string; lastLine: string; phase: BoardPhase; error?: string };
 const serviceList: { id: Service; label: string; subtitle: string; icon: typeof Banknote }[] = [
   { id: 'withdrawal', label: 'Cash withdrawal', subtitle: 'Dispense virtual banknotes', icon: Banknote },
   { id: 'balance', label: 'Balance inquiry', subtitle: 'View available funds', icon: WalletCards },
@@ -21,8 +22,8 @@ const serviceList: { id: Service; label: string; subtitle: string; icon: typeof 
   { id: 'pin-change', label: 'PIN services', subtitle: 'Demonstration only', icon: LockKeyhole }
 ];
 const initialBoards: Record<DeviceKey, BoardState> = {
-  uno: { connected: false, path: '', lastLine: '' },
-  sentinel: { connected: false, path: '', lastLine: '' }
+  uno: { connected: false, path: '', lastLine: '', phase: 'DISCONNECTED' },
+  sentinel: { connected: false, path: '', lastLine: '', phase: 'DISCONNECTED' }
 };
 const money = (value: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(value);
 const clock = () => new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
@@ -49,16 +50,31 @@ export default function App() {
     const unsubscribe = api.onSerialEvent(event => {
       const detail = event.kind === 'line' ? event.line : event.message || event.kind;
       setSerialEvents(previous => [...previous.slice(-79), clock() + '  ' + event.device.toUpperCase() + '  ' + detail]);
-      setBoards(previous => ({
-        ...previous,
-        [event.device]: {
-          ...previous[event.device],
-          connected: event.kind === 'opened' || event.kind === 'line',
-          path: event.path || previous[event.device].path,
-          lastLine: event.kind === 'line' ? event.line : previous[event.device].lastLine,
-          error: event.kind === 'error' ? event.message : undefined
-        }
-      }));
+      setBoards(previous => {
+        const current = previous[event.device];
+        const line = event.kind === 'line' ? (event.line || '') : '';
+        let phase: BoardPhase = current.phase;
+        if (event.kind === 'opened') phase = 'USB OPEN';
+        else if (event.kind === 'closed') phase = 'DISCONNECTED';
+        else if (event.kind === 'error') phase = 'ERROR';
+        else if (line.includes('SENTINEL ATM CONTROLLER V3.3 READY') || line.includes('SENTINEL ESP32 GUARDIAN V3.3 READY')) phase = 'BOOTED';
+        else if (line.includes('[LINK] V3 negotiation started') || line.includes('[LINK] V3 guardian HELLO observed')) phase = 'NEGOTIATING';
+        else if (event.device === 'uno' && line.includes('[STATUS_RX] Accepted HEALTHY')) phase = 'HEALTHY';
+        else if (event.device === 'sentinel' && line.includes('GUARDIAN_STATUS|mode=OBSERVING')) phase = 'OBSERVING';
+        else if (line.includes('[SECURITY_LOCK]') || line.includes('[REVOKE]') || line.includes('GUARDIAN_STATUS|mode=REVOKED') || line.includes('GUARDIAN_REVOKED')) phase = 'REVOKED';
+        else if (line.includes('[LINK] V3 handshake complete') || line.includes('[LINK] V3 handshake confirmed')) phase = 'NEGOTIATING';
+        return {
+          ...previous,
+          [event.device]: {
+            ...current,
+            connected: event.kind === 'opened' ? true : event.kind === 'closed' || event.kind === 'error' ? false : current.connected,
+            path: event.path || current.path,
+            lastLine: event.kind === 'line' ? event.line || '' : current.lastLine,
+            phase,
+            error: event.kind === 'error' ? event.message : undefined
+          }
+        };
+      });
       if (event.kind === 'error') setPortMessage(event.message || 'USB serial error.');
     });
     return unsubscribe;
@@ -136,7 +152,15 @@ export default function App() {
   const disconnectBoard = async (device: DeviceKey) => {
     if (!window.sentinelDesktop) return;
     await window.sentinelDesktop.disconnectBoard(device);
-    setBoards(previous => ({ ...previous, [device]: { ...previous[device], connected: false, path: '' } }));
+    setBoards(previous => ({ ...previous, [device]: { ...previous[device], connected: false, path: '', phase: 'DISCONNECTED' } }));
+  };
+  const sendBoardCommand = async (device: DeviceKey, command: string) => {
+    if (!window.sentinelDesktop) return { ok: false, error: 'Board commands require the installed desktop application.' };
+    const response = await window.sentinelDesktop.sendBoardCommand({ device, command });
+    setPortMessage(response.ok
+      ? (response.commandName || 'Command') + ' bytes were written to ' + device.toUpperCase() + '; this is not confirmation the board accepted the command.'
+      : response.error || 'Board command write failed.');
+    return response;
   };
 
   return <div className="sentinel-os">
@@ -176,7 +200,7 @@ export default function App() {
         {view === 'sentinel' && <SentinelView state={state} boards={boards} />}
         {view === 'experiments' && <ExperimentView state={state} dispatch={dispatch} />}
         {view === 'journal' && <JournalView events={[...state.events].reverse()} alerts={alerts} onExport={exportEvidence} />}
-        {view === 'hardware' && <HardwareView ports={ports} chosenPort={chosenPort} setChosenPort={setChosenPort} boards={boards} message={portMessage} serialEvents={serialEvents} refresh={refreshPorts} connect={connectBoard} disconnect={disconnectBoard} />}
+        {view === 'hardware' && <HardwareView ports={ports} chosenPort={chosenPort} setChosenPort={setChosenPort} boards={boards} message={portMessage} serialEvents={serialEvents} refresh={refreshPorts} connect={connectBoard} disconnect={disconnectBoard} sendCommand={sendBoardCommand} />}
         <footer className="status-footer"><span><i /> DOMAIN CORE ACTIVE</span><span>{eventCount.toString().padStart(3,'0')} EVENTS · {alerts.toString().padStart(2,'0')} ALERTS</span><span>FICTIONAL ACCOUNT · VIRTUAL CASH · RESEARCH PROTOTYPE</span></footer>
       </div>
     </main>
@@ -311,20 +335,77 @@ function JournalRow({ event }: { event: JournalEvent }) {
   return <article className={'journal-row severity-' + event.severity}><div className="journal-icon">{icon}</div><time>{event.at}</time><div className="journal-copy"><strong>{event.title}</strong><p>{event.detail}</p><small>{event.source} · {event.id}</small></div><span className="severity-tag">{event.severity.toUpperCase()}</span></article>;
 }
 
-function HardwareView({ ports, chosenPort, setChosenPort, boards, message, serialEvents, refresh, connect, disconnect }: {
+function HardwareView({ ports, chosenPort, setChosenPort, boards, message, serialEvents, refresh, connect, disconnect, sendCommand }: {
   ports: Port[]; chosenPort: Record<DeviceKey, string>;
   setChosenPort: Dispatch<SetStateAction<Record<DeviceKey, string>>>;
   boards: Record<DeviceKey, BoardState>; message: string; serialEvents: string[];
   refresh: () => void; connect: (device: DeviceKey) => void; disconnect: (device: DeviceKey) => void;
+  sendCommand: (device: DeviceKey, command: string) => Promise<{ ok: boolean; error?: string; commandName?: string; sensitive?: boolean }>;
 }) {
+  const [drafts, setDrafts] = useState<Record<DeviceKey, string>>({ uno: 'STATUS', sentinel: 'STATUS' });
+  const [commandBusy, setCommandBusy] = useState(false);
+  const [commandFeedback, setCommandFeedback] = useState('');
+  const pairReady = boards.uno.connected && boards.sentinel.connected &&
+    boards.uno.phase === 'HEALTHY' && boards.sentinel.phase === 'OBSERVING';
+  const runCommand = async (device: DeviceKey) => {
+    const command = drafts[device];
+    if (!boards[device].connected) {
+      setCommandFeedback('Connect the selected board before sending an operator command.');
+      return;
+    }
+    const commandName = command.split(' ')[0];
+    const requiresPair = ['CARD', 'PIN', 'BALANCE', 'WITHDRAW', 'CHANGE_PIN', 'FIXTURE_MISMATCH'].includes(commandName);
+    if (requiresPair && !pairReady) {
+      setCommandFeedback('Blocked by the desktop safety gate: both USB consoles must be open, the Uno must report accepted HEALTHY status, and the ESP32 must report OBSERVING.');
+      return;
+    }
+    setCommandBusy(true);
+    try {
+      const response = await sendCommand(device, command);
+      setCommandFeedback(response.ok
+        ? (response.commandName || 'Command') + ' was written locally. Check the board response before assuming acceptance.'
+        : response.error || 'Command failed.');
+      if (['PIN', 'ADD_ACCOUNT', 'CHANGE_PIN'].includes(commandName) || response.ok) {
+        setDrafts(previous => ({ ...previous, [device]: '' }));
+      }
+    } catch (error) {
+      setCommandFeedback(error instanceof Error ? error.message : String(error));
+      if (['PIN', 'ADD_ACCOUNT', 'CHANGE_PIN'].includes(commandName)) {
+        setDrafts(previous => ({ ...previous, [device]: '' }));
+      }
+    } finally {
+      setCommandBusy(false);
+    }
+  };
   return <>
-    <ScreenHeading number="06" eyebrow="HARDWARE-IN-THE-LOOP" title="Board bench" description="Native USB serial observation for the existing Arduino Uno and ESP32. The ATM model needs no boards." action={<button className="quiet-button" onClick={refresh}><RotateCcw size={14} /> Scan ports</button>} />
-    <div className="hardware-notice"><CircleAlert size={16} /><p>{message}<br /><strong>Close Arduino IDE Serial Monitor before connecting the same port.</strong> Console output is observation, not proof of firmware integrity.</p></div>
+    <ScreenHeading number="06" eyebrow="HARDWARE-IN-THE-LOOP" title="Board bench" description="Connect and control the existing Arduino Uno and ESP32 through an allowlisted local command bridge. The customer terminal remains a separate software simulation until a correlated HIL transaction path is qualified." action={<button className="quiet-button" onClick={refresh}><RotateCcw size={14} /> Scan ports</button>} />
+    <div className="hardware-notice"><CircleAlert size={16} /><p>{message}<br /><strong>Close Arduino IDE Serial Monitor before connecting the same port.</strong> Each USB port must have one owner. Local write success is not board acceptance.</p></div>
+    <section className="data-panel">
+      <PanelTitle icon={<ShieldCheck size={16} />} title="PROTECTED HIL READINESS" suffix="BOARD-REPORTED CONSOLE EVIDENCE" />
+      <div className="authority-row"><span>Uno peer status</span><b className={boards.uno.phase === 'HEALTHY' ? 'green-text' : boards.uno.phase === 'REVOKED' || boards.uno.phase === 'ERROR' ? 'red-text' : ''}>{boards.uno.phase}</b></div>
+      <div className="authority-row"><span>ESP32 guardian state</span><b className={boards.sentinel.phase === 'OBSERVING' ? 'green-text' : boards.sentinel.phase === 'REVOKED' || boards.sentinel.phase === 'ERROR' ? 'red-text' : ''}>{boards.sentinel.phase}</b></div>
+      <div className="authority-row"><span>Protected HIL</span><b className={pairReady ? 'green-text' : 'red-text'}>{pairReady ? 'OBSERVED READY' : 'NOT READY — DENY'}</b></div>
+      <p className="muted-note">Readiness is inferred from specific serial-console lines and is still board-reported, not cryptographic attestation. The application fails closed when these lines are missing.</p>
+    </section>
     <div className="board-grid">{(['uno','sentinel'] as DeviceKey[]).map((device,index) => {
       const board = boards[device];
-      return <section className="board-card" key={device}><div className="board-top"><div className={'board-symbol ' + device}>{device === 'uno' ? <Cpu size={22} /> : <ShieldCheck size={22} />}</div><div><small>DEVICE 0{index+1}</small><h2>{device === 'uno' ? 'Arduino Uno' : 'SENTINEL ESP32'}</h2><p>{device === 'uno' ? 'Primary ATM control microcontroller' : 'Independent guardian controller'}</p></div><span className={'board-status ' + (board.connected ? 'connected' : '')}><i />{board.connected ? 'CONNECTED' : 'DISCONNECTED'}</span></div><label className="field-label" htmlFor={'port-'+device}>USB SERIAL PORT</label><select id={'port-'+device} value={chosenPort[device]} disabled={board.connected} onChange={event => setChosenPort(previous => ({ ...previous, [device]: event.target.value }))}><option value="">Select a port</option>{ports.map(port => <option key={port.path} value={port.path}>{port.path}{port.manufacturer ? ' · ' + port.manufacturer : ''}</option>)}</select><div className="board-meta"><span>LAST SERIAL LINE</span><strong>{board.lastLine || 'Waiting for serial data'}</strong></div>{board.error && <p className="error-line">{board.error}</p>}<button className={'board-button ' + (board.connected ? 'disconnect' : '')} onClick={() => board.connected ? disconnect(device) : connect(device)} disabled={!board.connected && !chosenPort[device]}>{board.connected ? <><XOctagon size={15} /> Disconnect board</> : <><Plug size={15} /> Connect USB console</>}</button></section>;
+      return <section className="board-card" key={device}>
+        <div className="board-top"><div className={'board-symbol ' + device}>{device === 'uno' ? <Cpu size={22} /> : <ShieldCheck size={22} />}</div><div><small>DEVICE 0{index+1}</small><h2>{device === 'uno' ? 'Arduino Uno' : 'SENTINEL ESP32'}</h2><p>{device === 'uno' ? 'Primary ATM control microcontroller' : 'Independent guardian controller'}</p></div><span className={'board-status ' + (board.connected ? 'connected' : '')}><i />{board.connected ? 'CONNECTED' : 'DISCONNECTED'}</span></div>
+        <label className="field-label" htmlFor={'port-'+device}>USB SERIAL PORT</label>
+        <select id={'port-'+device} value={chosenPort[device]} disabled={board.connected} onChange={event => setChosenPort(previous => ({ ...previous, [device]: event.target.value }))}><option value="">Select a port</option>{ports.map(port => <option key={port.path} value={port.path}>{port.path}{port.manufacturer ? ' · ' + port.manufacturer : ''}</option>)}</select>
+        <div className="board-meta"><span>BOARD-REPORTED PHASE</span><strong>{board.phase}</strong><span>LAST SERIAL LINE</span><strong>{board.lastLine || 'Waiting for serial data'}</strong></div>
+        {board.error && <p className="error-line">{board.error}</p>}
+        <button className={'board-button ' + (board.connected ? 'disconnect' : '')} onClick={() => board.connected ? disconnect(device) : connect(device)} disabled={!board.connected && !chosenPort[device]}>{board.connected ? <><XOctagon size={15} /> Disconnect board</> : <><Plug size={15} /> Connect USB console</>}</button>
+        <form className="board-command-form" onSubmit={event => { event.preventDefault(); void runCommand(device); }}>
+          <label className="field-label" htmlFor={'command-'+device}>ALLOWLISTED OPERATOR COMMAND</label>
+          <input id={'command-'+device} value={drafts[device]} onChange={event => setDrafts(previous => ({ ...previous, [device]: event.target.value }))} placeholder={device === 'uno' ? 'STATUS / ADD_ACCOUNT / CARD / PIN / WITHDRAW' : 'STATUS / SET_LIMITS / FIXTURE_REVOKE'} disabled={!board.connected || commandBusy} autoComplete="off" spellCheck={false} />
+          <button className="board-button" type="submit" disabled={!board.connected || commandBusy || !drafts[device]}>{commandBusy ? 'Sending…' : 'Send command'}</button>
+          <p className="muted-note">PIN-bearing commands are cleared from this input after sending. Raw command text is not copied into the host event journal or command-write diagnostic.</p>
+        </form>
+      </section>;
     })}</div>
-    <section className="data-panel serial-log"><PanelTitle icon={<Terminal size={16} />} title="USB SERIAL OBSERVATION" suffix="TEXT ONLY" />{serialEvents.length ? serialEvents.slice(-15).reverse().map((line,index) => <p key={index}>{line}</p>) : <div className="empty-state">No serial events yet. Simulation mode remains fully available.</div>}</section>
-    <div className="scientific-note"><CircleAlert size={16} /><p>This initial adapter reads USB console lines only. Framed protocol parsing and security decisions based on validated hardware messages are later milestones. No serial message alone grants dispense authority.</p></div>
+    {commandFeedback && <div className="hardware-notice"><CircleAlert size={16} /><p>{commandFeedback}</p></div>}
+    <section className="data-panel serial-log"><PanelTitle icon={<Terminal size={16} />} title="USB SERIAL OBSERVATION" suffix="RAW LINES / NOT ATTESTATION" />{serialEvents.length ? serialEvents.slice(-15).reverse().map((line,index) => <p key={index}>{line}</p>) : <div className="empty-state">No serial events yet. Simulation mode remains fully available.</div>}</section>
+    <div className="scientific-note"><CircleAlert size={16} /><p>This bridge can transmit only allowlisted operator commands and displays incoming console lines, but it does not yet perform full desktop transaction correlation. It intentionally blocks customer/withdrawal/fixture commands until both boards report ready.</p></div>
   </>;
 }
