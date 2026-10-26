@@ -13,9 +13,10 @@
 - [x] Tighten the software virtual-dispenser permit window: a permit cannot be used before its issue time, at/after its expiry, or with an invalid time window.
 - [x] Add regression tests for future-issued, mismatched transaction/amount, and exact-expiry permits; every denial must leave account balance, cassette cash, and dispensed total unchanged.
 - [ ] Audit all software-gate edge cases: missing/stale/wrong-session/wrong-transaction/wrong-amount/replayed/revoked decisions, reset invalidation, duplicate actions, and money-state invariants.
-- [ ] Define the critical peer-message delivery contract for REQUEST, PERMIT, DENY, TX_COMMITTED and ACK, including same-sequence retries, idempotent duplicate handling, and fail-closed timeout outcomes.
-- [ ] Implement and test the reliable commit-report lifecycle without ever applying the Uno balance/cassette mutation twice.
-- [ ] Extend deterministic protocol tests to prove drops, duplicates and timeouts cannot create an unauthorized or duplicate transaction.
+- [x] Audit the existing TX_COMMITTED/ACK implementation: the Uno already retains and retries the same commit event sequence, while the ESP32 stores and replays the matching ACK for an exact duplicate event. Do not rewrite these existing paths without evidence.
+- [x] Add deterministic model coverage for a lost commit event, a lost ACK, idempotent duplicate commit reports, and retry exhaustion; assert the controller mutation count remains one.
+- [ ] Finish the critical-message contract audit for REQUEST, PERMIT, DENY, TX_COMMITTED and ACK, including same-sequence retries, idempotent duplicate handling, and fail-closed timeout outcomes.
+- [ ] Compare the model against both actual firmware implementations and add source/contract checks for every retry/ACK edge; model tests alone do not prove embedded behavior.
 - [ ] Re-run desktop/domain tests, Uno build, ESP32 build and protocol contract tests on this quarter's exact commit.
 
 **Quarter 1 exit gate:** Automated tests prove the virtual gate requires a current explicit transaction-specific permit and protocol retries never repeat a money mutation. Hardware liveness is reported separately and remains **NOT VERIFIED** until paired-board logs prove it.
@@ -57,6 +58,7 @@
 | Latest repository baseline audited | Done | `main` tree and current source files inspected before changes |
 | Permit time-window validation tightened | Implemented on this branch; CI pending | `src/core/atm-engine.ts` |
 | Three permit-boundary regressions added | Implemented on this branch; CI pending | `src/core/atm-engine.test.ts` |
+| Commit delivery fault-model cases added | Implemented on this branch; CI pending | `.github/protocol-v3-model.node.mjs` — lost event, lost ACK, exact retry identity and retry exhaustion |
 | Quarter 1 overall | **IN PROGRESS** | Remaining protocol delivery, fault-model and full test gates above |
 | Physical UART qualification | **NOT VERIFIED** | Requires actual Uno + ESP32 paired logs; code changes cannot establish it |
 
