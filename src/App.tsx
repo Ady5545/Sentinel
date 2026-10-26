@@ -12,7 +12,7 @@ import { canBeginHilWithdrawal, redactSensitiveSerialText, type HilShadowState, 
 import { createUnoHilAdapter, type UnoCommand } from './core/uno-hil-adapter';
 import {
   canRecommissionHilShadow, createInitialResearchSession, replayRunRecords, researchPairReady,
-  researchSessionReducer, RESEARCH_SCENARIO_CATALOG, type ResearchMode
+  researchSessionReducer, RESEARCH_SCENARIO_CATALOG, type ResearchMode, type ResearchRunRecord
 } from './core/research-session';
 
 type View = 'terminal' | 'machine' | 'sentinel' | 'experiments' | 'journal' | 'hardware';
@@ -629,15 +629,19 @@ function HILOperatorControls({ pairReady, researchMode, hilShadow, hilFaultLatch
   </>;
 }
 
-function HardwareView({ ports, chosenPort, setChosenPort, boards, message, serialEvents, refresh, connect, disconnect, sendCommand, hilTransaction, boardBootEpochs, hilFaultResetBaseline, nowMs, clearHilTransaction }: {
+function HardwareView({ ports, chosenPort, setChosenPort, boards, message, serialEvents, refresh, connect, disconnect, sendCommand, researchMode, researchRunId, hilShadow, hilFaultLatched, canRecommissionFault, researchRecords, hilTransaction, nowMs, clearHilTransaction }: {
   ports: Port[]; chosenPort: Record<DeviceKey, string>;
   setChosenPort: Dispatch<SetStateAction<Record<DeviceKey, string>>>;
   boards: Record<DeviceKey, BoardState>; message: string; serialEvents: string[];
   refresh: () => void; connect: (device: DeviceKey) => void; disconnect: (device: DeviceKey) => void;
-  sendCommand: (device: DeviceKey, command: string) => Promise<{ ok: boolean; error?: string; commandName?: string; sensitive?: boolean }>;
+  sendCommand: (device: DeviceKey, command: BoardCommand) => Promise<{ ok: boolean; error?: string; commandName?: string; sensitive?: boolean }>;
+  researchMode: ResearchMode;
+  researchRunId: string;
+  hilShadow: HilShadowState;
+  hilFaultLatched: boolean;
+  canRecommissionFault: boolean;
+  researchRecords: readonly ResearchRunRecord[];
   hilTransaction: HilTransaction | null;
-  boardBootEpochs: HilBoardResetEpochs;
-  hilFaultResetBaseline: HilBoardResetEpochs | null;
   nowMs: number;
   clearHilTransaction: () => void;
 }) {
@@ -655,7 +659,7 @@ function HardwareView({ ports, chosenPort, setChosenPort, boards, message, seria
     boards.uno.phase === 'HEALTHY' && boards.sentinel.phase === 'OBSERVING';
   const canClearHilRecord = Boolean(hilTransaction && (
     hilTransaction.phase === 'RECONCILED' || hilTransaction.phase === 'DENIED' ||
-    canClearHilFaultAfterPairedReset(hilTransaction.phase, pairReady, hilFaultResetBaseline, boardBootEpochs)
+    (hilFaultLatched && canRecommissionFault && ['REVOKED', 'MISMATCH'].includes(hilTransaction.phase))
   ));
   const runCommand = async (device: DeviceKey) => {
     const command = drafts[device];
@@ -663,15 +667,20 @@ function HardwareView({ ports, chosenPort, setChosenPort, boards, message, seria
       setCommandFeedback('Connect the selected board before sending an operator command.');
       return;
     }
-    const commandName = command.split(' ')[0];
-    const requiresPair = ['CARD', 'PIN', 'BALANCE', 'WITHDRAW', 'CHANGE_PIN', 'FIXTURE_MISMATCH'].includes(commandName);
-    if (requiresPair && !pairReady) {
-      setCommandFeedback('Blocked by the desktop safety gate: both USB consoles must be open, the Uno must report accepted HEALTHY status, and the ESP32 must report OBSERVING.');
+    const parts = command.split(' ');
+    const commandName = parts[0];
+    if (!commandName || parts.some(part => !part)) {
+      setCommandFeedback('Use a command name and single-space-separated arguments.');
+      return;
+    }
+    const hilOnly = new Set(['ADD_ACCOUNT', 'SET_CASH', 'SET_POLICY', 'SET_LIMITS', 'CARD', 'PIN', 'BALANCE', 'WITHDRAW', 'CHANGE_PIN', 'FIXTURE_MISMATCH', 'FIXTURE_REVOKE', 'CANCEL', 'LOGOUT']);
+    if (hilOnly.has(commandName)) {
+      setCommandFeedback('Customer, setup, policy, and fixture actions are disabled in the free-form console. Use the typed HIL operator workflow in explicit HIL mode.');
       return;
     }
     setCommandBusy(true);
     try {
-      const response = await sendCommand(device, command);
+      const response = await sendCommand(device, { name: commandName, args: parts.slice(1) });
       setCommandFeedback(response.ok
         ? (response.commandName || 'Command') + ' was written locally. Check the board response before assuming acceptance.'
         : response.error || 'Command failed.');
@@ -688,8 +697,32 @@ function HardwareView({ ports, chosenPort, setChosenPort, boards, message, seria
     }
   };
   return <>
-    <ScreenHeading number="06" eyebrow="HARDWARE-IN-THE-LOOP" title="Board bench" description="Connect and control the existing Arduino Uno and ESP32 through an allowlisted local command bridge. The customer terminal remains a separate software simulation until a correlated HIL transaction path is qualified." action={<button className="quiet-button" onClick={refresh}><RotateCcw size={14} /> Scan ports</button>} />
+    <ScreenHeading number="06" eyebrow="HARDWARE-IN-THE-LOOP" title="Board bench" description={researchMode + ' mode · Run ' + researchRunId + '. HIL setup and customer commands use the typed Uno adapter and remain blocked until fresh paired readiness and shadow commission.'} action={<button className="quiet-button" onClick={refresh}><RotateCcw size={14} /> Scan ports</button>} />
     <div className="hardware-notice"><CircleAlert size={16} /><p>{message}<br /><strong>Close Arduino IDE Serial Monitor before connecting the same port.</strong> Each USB port must have one owner. Local write success is not board acceptance.</p></div>
+    <section className="data-panel">
+      <PanelTitle icon={<Activity size={16} />} title="SHARED RESEARCH SESSION" suffix="APPEND-ONLY LOCAL RUN LEDGER" />
+      <div className="authority-row"><span>Execution mode</span><b>{researchMode}</b></div>
+      <div className="authority-row"><span>Run ID</span><b>{researchRunId}</b></div>
+      <div className="authority-row"><span>Recorded evidence events</span><b>{researchRecords.length}</b></div>
+      <div className="authority-row"><span>Host HIL fault latch</span><b className={hilFaultLatched ? 'red-text' : 'green-text'}>{hilFaultLatched ? 'LATCHED — DENY' : 'CLEAR'}</b></div>
+      <p className="muted-note">Records carry SIMULATED, BOARD_REPORTED, or HOST_DERIVED provenance. They are append-only in this running session and exported for later review; board console text is not cryptographic attestation.</p>
+    </section>
+    <section className="data-panel">
+      <PanelTitle icon={<Banknote size={16} />} title="DESKTOP HIL SHADOW" suffix="VIRTUAL ONLY · IDEMPOTENT GATE" />
+      <div className="authority-row"><span>Shadow state</span><b className={hilShadow.status === 'COMMISSIONED' ? 'green-text' : hilShadow.status === 'RECONCILIATION REQUIRED' ? 'red-text' : ''}>{hilShadow.status}</b></div>
+      <div className="authority-row"><span>Fictional account</span><b>{hilShadow.accountId || 'NOT COMMISSIONED'}</b></div>
+      <div className="authority-row"><span>Shadow balance</span><b>{money(hilShadow.accountBalance)}</b></div>
+      <div className="authority-row"><span>Shadow cassette cash</span><b>{money(hilShadow.cassetteCash)}</b></div>
+      <div className="authority-row"><span>Virtual cash committed</span><b>{money(hilShadow.dispensedTotal)}</b></div>
+      <div className="authority-row"><span>Unique committed transactions</span><b>{hilShadow.committedTransactionIds.length}</b></div>
+      {hilShadow.error && <p className="error-line">{hilShadow.error}</p>}
+      <p className="muted-note">The shadow is reduced only from Uno account/cassette configuration observations and a matching PERMIT → Uno commit → ESP32 reconciliation chain. Duplicate transaction IDs cannot debit the shadow twice.</p>
+    </section>
+    {hilFaultLatched && <section className="data-panel">
+      <PanelTitle icon={<ShieldAlert size={16} />} title="HIL AUTHORITY FAULT LATCH" suffix="HOST ENFORCED" />
+      <p className="muted-note">The main process persists this latch across renderer reloads. Both boards must boot after the fault and return to fresh paired readiness before the latch can be cleared and the shadow recommissioned.</p>
+      <button className="board-button danger-command" onClick={() => void clearHilTransaction()} disabled={!canRecommissionFault}>Clear host fault latch and reset shadow</button>
+    </section>}
     <section className="data-panel">
       <PanelTitle icon={<ShieldCheck size={16} />} title="PROTECTED HIL READINESS" suffix="BOARD-REPORTED CONSOLE EVIDENCE" />
       <div className="authority-row"><span>Uno peer status</span><b className={phaseForDisplay('uno') === 'HEALTHY' ? 'green-text' : phaseForDisplay('uno') === 'REVOKED' || phaseForDisplay('uno') === 'ERROR' || phaseForDisplay('uno') === 'STALE' ? 'red-text' : ''}>{phaseForDisplay('uno')}</b></div>
@@ -718,7 +751,7 @@ function HardwareView({ ports, chosenPort, setChosenPort, boards, message, seria
     <section className="data-panel hil-operator-panel">
       <PanelTitle icon={<Cpu size={16} />} title="UNO / SENTINEL OPERATOR WORKFLOW" suffix="FICTIONAL DEMO ONLY" />
       <p className="muted-note">This panel sends allowlisted commands to the connected boards. It does not drive physical cash hardware. A local USB write is not proof the board accepted a command.</p>
-      <HILOperatorControls pairReady={pairReady} unoConnected={boards.uno.connected} sendCommand={sendCommand} hilTransaction={hilTransaction} />
+      <HILOperatorControls pairReady={pairReady} researchMode={researchMode} hilShadow={hilShadow} hilFaultLatched={hilFaultLatched} sendCommand={sendCommand} hilTransaction={hilTransaction} />
     </section>
     <section className="data-panel hil-transaction-panel">
       <PanelTitle icon={<Activity size={16} />} title="HIL TRANSACTION CORRELATION" suffix="BOARD-REPORTED / PROTOCOL-EVIDENCE" />
@@ -729,9 +762,9 @@ function HardwareView({ ports, chosenPort, setChosenPort, boards, message, seria
         <div className="authority-row"><span>Lifecycle state</span><b className={hilTransaction.phase === 'RECONCILED' ? 'green-text' : hilTransaction.phase === 'DENIED' || hilTransaction.phase === 'REVOKED' || hilTransaction.phase === 'MISMATCH' ? 'red-text' : ''}>{hilTransaction.phase}</b></div>
         {hilTransaction.balance !== undefined && <div className="authority-row"><span>Uno-reported remaining balance</span><b>{money(hilTransaction.balance)}</b></div>}
         <p className="muted-note">{hilTransaction.message}</p>
-        <p className="muted-note">{hilTransaction.phase === 'RECONCILED' ? 'Both relevant board reports have been observed for this transaction. This remains board-reported evidence, not cryptographic attestation; no desktop shadow-cash mutation is performed by this initial bridge.' : 'The desktop does not mark this as a completed HIL withdrawal or change its software-simulation ledger.'}</p>
+        <p className="muted-note">{hilTransaction.phase === 'RECONCILED' ? 'The matching permit, Uno commit, and ESP32 reconciliation were observed in the same run and host sessions. The desktop shadow was debited exactly once after validating the Uno-reported post-commit balance and denomination plan.' : 'No desktop shadow cash is changed until exact transaction ID, amount, permit, Uno commit, guardian reconciliation, session binding, and expected post-commit balance all match.'}</p>
         <button className="quiet-button" onClick={clearHilTransaction} disabled={!canClearHilRecord}>Clear displayed terminal record</button>
-        {(['REVOKED', 'MISMATCH'].includes(hilTransaction.phase) && !canClearHilFaultAfterPairedReset(hilTransaction.phase, pairReady, hilFaultResetBaseline, boardBootEpochs)) && <p className="muted-note">This fault stays latched in the desktop until both boards emit a new boot/session-start record and fresh paired readiness is re-established. Clearing the display alone never clears a board fault.</p>}
+        {(['REVOKED', 'MISMATCH'].includes(hilTransaction.phase) && !canRecommissionFault) && <p className="muted-note">This fault stays latched in the desktop and main process until both boards emit new boot/session-start records after the fault and fresh paired readiness is re-established.</p>}
       </>}
     </section>
     {commandFeedback && <div className="hardware-notice"><CircleAlert size={16} /><p>{commandFeedback}</p></div>}
