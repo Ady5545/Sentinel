@@ -11,7 +11,8 @@
 
 - [x] Audit current `main` implementation and distinguish code/CI evidence from physical hardware evidence.
 - [x] Tighten the software virtual-dispenser permit window: a permit cannot be used before its issue time, at/after its expiry, or with an invalid time window.
-- [x] Add regression tests for future-issued, mismatched transaction/amount, and exact-expiry permits; every denial must leave account balance, cassette cash, and dispensed total unchanged.
+- [x] Bind every simulated permit to the originating run ID so a permit from a prior/reset run cannot authorize a later transaction.
+- [x] Add regression tests for future-issued, mismatched transaction/amount, exact-expiry, and cross-run permits; every denial must leave account balance, cassette cash, and dispensed total unchanged.
 - [ ] Audit all software-gate edge cases: missing/stale/wrong-session/wrong-transaction/wrong-amount/replayed/revoked decisions, reset invalidation, duplicate actions, and money-state invariants.
 - [x] Audit the existing TX_COMMITTED/ACK implementation: the Uno already retains and retries the same commit event sequence, while the ESP32 stores and replays the matching ACK for an exact duplicate event. Do not rewrite these existing paths without evidence.
 - [x] Add deterministic model coverage for a lost commit event, a lost ACK, idempotent duplicate commit reports, and retry exhaustion; assert the controller mutation count remains one.
@@ -57,8 +58,8 @@
 | Work item | Status | Evidence |
 |---|---|---|
 | Latest repository baseline audited | Done | `main` tree and current source files inspected before changes |
-| Permit time-window validation tightened | Implemented on this branch; CI pending | `src/core/atm-engine.ts` |
-| Three permit-boundary regressions added | Implemented on this branch; CI pending | `src/core/atm-engine.test.ts` |
+| Permit time-window and run-binding validation tightened | Implemented on this branch; latest CI pending | `src/core/atm-engine.ts` — permits carry the originating `runId` and must be current, unexpired, and transaction/amount matched |
+| Five permit-boundary/run-binding regressions added | Implemented on this branch; latest CI pending | `src/core/atm-engine.test.ts` |
 | Commit delivery fault-model cases added | Implemented on this branch; CI pending | `.github/protocol-v3-model.node.mjs` — lost event, lost ACK, exact retry identity and retry exhaustion |
 | Firmware commit retry/ACK source contract | Added on this branch; CI pending | `.github/protocol-v3-handshake-contract.mjs` — bounded retries, identical sequence and idempotent ACK replay |
 | Vitest discovery issue | Fixed on this branch; CI pending | `package.json` now scopes Vitest to `src`, avoiding Node-test files under `.agent` being treated as Vitest suites |
