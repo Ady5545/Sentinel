@@ -29,19 +29,23 @@ Commands are one newline-terminated line on the Uno USB serial port at 115200 ba
 
 - ADD_ACCOUNT CARD_ID PIN START_BALANCE — create one fictional demo account. Up to four accounts are held in RAM. There is no built-in default card or PIN.
 - SET_CASH COUNT_500 COUNT_200 COUNT_100 COUNT_50 — configure fictional note inventory; counts default to zero.
-- SET_POLICY MAX_PER_TXN WINDOW_LIMIT — change the ATM controller's per-transaction and uptime-window limits in RAM.
+- SET_POLICY MAX_PER_TXN WINDOW_LIMIT — set controller withdrawal limits. Optional full policy: SET_POLICY MAX_PER_TXN WINDOW_LIMIT WINDOW_MS PIN_TRIES LOCKOUT_MS PIN_TIMEOUT_MS SESSION_TIMEOUT_MS GUARDIAN_TIMEOUT_MS TX_TIMEOUT_MS.
 - CARD CARD_ID then PIN PIN — begin a customer session and verify the provisioned demo PIN.
+- CHANGE_PIN CURRENT_PIN NEW_PIN CONFIRM_NEW_PIN — change the active demo account PIN after authentication; all PIN fields are cleared from command buffers after processing.
 - BALANCE, WITHDRAW AMOUNT, CANCEL, LOGOUT, STATUS, JOURNAL, HELP.
 - FIXTURE_MISMATCH — deliberately send a clearly labelled synthetic integrity-violation fixture; it is not detection of actual malware.
 
 Example commissioning values for a classroom demo only (do not reuse real account data): ADD_ACCOUNT CARD01 4826 50000, followed by SET_CASH 20 20 20 20. A withdrawal of ₹500 then requires CARD CARD01, PIN 4826, and WITHDRAW 500. The guardian must be linked and must issue a one-shot PERMIT for that transaction. The example PIN is illustrative, not embedded in the firmware.
 
-The desktop UI should mask PIN entry before sending it to the Uno; the USB serial terminal itself does not provide a secure keypad. Runtime accounts, PINs, balances, policy, transaction history and cash inventory are **volatile RAM state** and are wiped by board reset. This is deliberate for the prototype: it avoids claiming that a low-entropy ATM PIN is protected by plaintext storage or ordinary Uno EEPROM. The app can provision its fictional demo state on startup.
+The desktop UI should mask PIN entry before sending it to the Uno; the USB serial terminal itself does not provide a secure keypad. Policy defaults are intentionally conservative and configurable. The extended Uno policy ranges are: budget window 60,000–86,400,000 ms; PIN failures 1–10; lockout 5,000–900,000 ms; PIN entry timeout 5,000–120,000 ms; customer session timeout 10,000–600,000 ms; guardian timeout 1,800–30,000 ms; transaction decision timeout 500–10,000 ms. Guardian policy ranges: heartbeat timeout 500–10,000 ms; peer timeout must exceed heartbeat timeout and be at most 30,000 ms; budget window 60,000–86,400,000 ms; failure threshold 3–30; failure window 10,000–600,000 ms; commit timeout 500–10,000 ms. Configure matching Uno transaction and ESP32 commit timeouts if you change the defaults.
+
+Runtime accounts, PINs, balances, policy, transaction history and cash inventory are **volatile RAM state** and are wiped by board reset. This is deliberate for the prototype: it avoids claiming that a low-entropy ATM PIN is protected by plaintext storage or ordinary Uno EEPROM. The app can provision its fictional demo state on startup.
 
 ## ESP32 local commands
 
 - STATUS — show guardian state, last reported ATM state, heartbeat age, commit observations and denials.
-- SET_LIMITS MAX_TXN WINDOW_LIMIT — configure guardian-side policy values in RAM; WINDOW_LIMIT must be at least MAX_TXN.
+- SET_LIMITS MAX_TXN WINDOW_LIMIT — configure guardian-side withdrawal limits in RAM.
+- SET_POLICY MAX_TXN WINDOW_LIMIT HEARTBEAT_MS LINK_TIMEOUT_MS WINDOW_MS PIN_FAILS PIN_WINDOW_MS COMMIT_MS — configure the full guardian policy in RAM.
 - FIXTURE_REVOKE — deliberately latch a synthetic guardian revocation.
 - HELP.
 
