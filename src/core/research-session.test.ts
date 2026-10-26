@@ -33,14 +33,14 @@ describe('Quarter 3 research session coordinator', () => {
     const run = readyRun();
     const stale = reduceResearchRun(run, { type: 'HIL_REQUEST', sessionId: 'old-uno-session', transactionId: 'TX-1', amount: 500, at });
     expect(stale.phase).toBe('FROZEN');
-    expect(stale.shadowUpdateCount).toBe(0);
+    expect(stale.correlatedCommitCount).toBe(0);
   });
 
   it('reconciles one exact transaction and increments the shadow mutation count once', () => {
     const run = cleanTransaction();
     expect(run.activeTransaction?.phase).toBe('RECONCILED');
     expect(run.processedTransactionIds).toEqual(['TX-1']);
-    expect(run.shadowUpdateCount).toBe(1);
+    expect(run.correlatedCommitCount).toBe(1);
     expect(run.phase).toBe('ACTIVE');
   });
 
@@ -48,12 +48,12 @@ describe('Quarter 3 research session coordinator', () => {
     let run = cleanTransaction();
     const eventCount = run.events.length;
     run = reduceResearchRun(run, { type: 'GUARDIAN_ACK', sessionId: 'sentinel-session-1', transactionId: 'TX-1', amount: 500, at });
-    expect(run.shadowUpdateCount).toBe(1);
+    expect(run.correlatedCommitCount).toBe(1);
     expect(run.events.length).toBe(eventCount);
 
     run = reduceResearchRun(run, { type: 'HIL_REQUEST', sessionId: 'uno-session-1', transactionId: 'TX-1', amount: 500, at });
     expect(run.phase).toBe('FROZEN');
-    expect(run.shadowUpdateCount).toBe(1);
+    expect(run.correlatedCommitCount).toBe(1);
   });
 
   it('freezes on transaction ID/amount mismatch and never changes the shadow', () => {
@@ -62,7 +62,7 @@ describe('Quarter 3 research session coordinator', () => {
     run = reduceResearchRun(run, { type: 'HIL_PERMIT', sessionId: 'sentinel-session-1', transactionId: 'TX-2', amount: 1000, at });
     expect(run.phase).toBe('FROZEN');
     expect(run.activeTransaction?.phase).toBe('MISMATCH');
-    expect(run.shadowUpdateCount).toBe(0);
+    expect(run.correlatedCommitCount).toBe(0);
     expect(run.freezeReason).toContain('exact active request ID, amount and phase');
   });
 
@@ -71,7 +71,7 @@ describe('Quarter 3 research session coordinator', () => {
     run = reduceResearchRun(run, { type: 'HIL_REQUEST', sessionId: 'uno-session-1', transactionId: 'TX-3', amount: 500, at });
     run = reduceResearchRun(run, { type: 'BOARD_SESSION', role: 'UNO', sessionId: 'uno-session-2', at });
     expect(run.phase).toBe('FROZEN');
-    expect(run.shadowUpdateCount).toBe(0);
+    expect(run.correlatedCommitCount).toBe(0);
   });
 
   it('redacts PIN values and keeps event records immutable', () => {
@@ -86,16 +86,16 @@ describe('Quarter 3 research session coordinator', () => {
   it('replays versioned scenarios offline with honest synthetic provenance', () => {
     const clean = replaySyntheticScenario(SYNTHETIC_SCENARIOS[0], 'fixture-clean', at);
     expect(clean.mode).toBe('SOFTWARE_ONLY');
-    expect(clean.shadowUpdateCount).toBe(1);
+    expect(clean.correlatedCommitCount).toBe(1);
     expect(clean.events.filter(event => event.role === 'UNO' || event.role === 'SENTINEL').every(event => event.provenance === 'SYNTHETIC_FIXTURE')).toBe(true);
 
     const mismatch = replaySyntheticScenario(SYNTHETIC_SCENARIOS[1], 'fixture-mismatch', at);
     expect(mismatch.phase).toBe('FROZEN');
-    expect(mismatch.shadowUpdateCount).toBe(0);
+    expect(mismatch.correlatedCommitCount).toBe(0);
 
     const denied = replaySyntheticScenario(SYNTHETIC_SCENARIOS[2], 'fixture-denied', at);
     expect(denied.activeTransaction?.phase).toBe('DENIED');
-    expect(denied.shadowUpdateCount).toBe(0);
+    expect(denied.correlatedCommitCount).toBe(0);
   });
 
   it('exports versioned JSON and escaped CSV from the immutable event ledger', () => {
