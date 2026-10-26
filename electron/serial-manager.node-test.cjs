@@ -120,6 +120,12 @@ test('known board lines become narrow typed events without exposing sensitive fi
   assert.deepEqual(parseBoardLine('sentinel', '[RECONCILE] Matching controller-reported virtual commit id=T0000007;amount=500'), {
     type: 'COMMIT_RECONCILIATION', id: 'T0000007', amount: 500
   });
+  assert.deepEqual(parseBoardLine('sentinel', '[COMMIT_ACK_TX] ACK sequence=8 acknowledges UNO EVENT sequence=7; id=T0000007; amount=500'), {
+    type: 'COMMIT_ACK_SENT', id: 'T0000007', amount: 500
+  });
+  assert.deepEqual(parseBoardLine('uno', '[COMMIT_ACK] Exact guardian acknowledgement accepted for id=T0000007; amount=500'), {
+    type: 'UNO_ACK_ACCEPTED', id: 'T0000007', amount: 500
+  });
   const event = parseBoardLine('uno', 'ATM_EVENT|WITHDRAWAL_PENDING|id=TX01;amount=500;pin=4826');
   assert.deepEqual(event, { type: 'ATM_EVENT', eventName: 'WITHDRAWAL_PENDING', id: 'TX01', amount: 500, balance: undefined, reason: undefined });
   assert.equal(JSON.stringify(event).includes('4826'), false);
