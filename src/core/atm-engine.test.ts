@@ -43,20 +43,79 @@ describe('ATM customer state machine', () => {
     expect(state.failedPinAttempts).toBe(3);
   });
 
-  it('updates account and cassette balances only after an allowed withdrawal', () => {
+  it('requires a separate explicit simulation permit before a protected withdrawal commits', () => {
     let state = initialAtmState('protected');
     state = atmReducer(state, { type: 'INSERT_CARD' });
     for (const digit of '1234') state = atmReducer(state, { type: 'PIN_DIGIT', digit });
     state = atmReducer(state, { type: 'PIN_SUBMIT' });
     state = atmReducer(state, { type: 'SELECT_SERVICE', service: 'withdrawal' });
     state = atmReducer(state, { type: 'SELECT_AMOUNT', amount: 1000 });
-    const final = atmReducer(state, { type: 'CONFIRM_AMOUNT' });
-    expect(final.accountBalance).toBe(state.accountBalance - 1000);
-    expect(final.cassetteCash).toBe(state.cassetteCash - 1000);
-    expect(final.dispensedTotal).toBe(1000);
-    expect(final.lastDecision).toBe('PERMIT');
+    state = atmReducer(state, { type: 'CONFIRM_AMOUNT', nowMs: 1000 });
+    expect(state.screen).toBe('pending');
+    expect(state.pendingWithdrawal?.id).toBeTruthy();
+    expect(state.accountBalance).toBe(25000);
+    expect(state.cassetteCash).toBe(50000);
+    expect(state.dispensedTotal).toBe(0);
+    expect(state.lastDecision).toBe('NONE');
+
+    state = atmReducer(state, { type: 'AUTHORIZE_PENDING_WITHDRAWAL', nowMs: 1010 });
+    expect(state.simulationPermit?.transactionId).toBe(state.pendingWithdrawal?.id);
+    expect(state.simulationPermit?.amount).toBe(1000);
+    expect(state.simulationPermit?.evidenceSource).toBe('SIMULATED');
+    expect(state.accountBalance).toBe(25000);
+    expect(state.cassetteCash).toBe(50000);
+
+    state = atmReducer(state, { type: 'COMMIT_PENDING_WITHDRAWAL', nowMs: 1020 });
+    expect(state.accountBalance).toBe(24000);
+    expect(state.cassetteCash).toBe(49000);
+    expect(state.dispensedTotal).toBe(1000);
+    expect(state.lastDecision).toBe('PERMIT');
+
+    const repeated = atmReducer(state, { type: 'COMMIT_PENDING_WITHDRAWAL', nowMs: 1030 });
+    expect(repeated.accountBalance).toBe(24000);
+    expect(repeated.cassetteCash).toBe(49000);
+    expect(repeated.dispensedTotal).toBe(1000);
   });
-});
+
+  it('denies commit without a permit and leaves money state unchanged', () => {
+    const state = {
+      ...initialAtmState('protected'), screen: 'pending' as const, authenticated: true, service: 'withdrawal' as const,
+      pendingWithdrawal: { id: 'TX-1', amount: 1000, requestedAtMs: 1 }
+    };
+    const denied = atmReducer(state, { type: 'COMMIT_PENDING_WITHDRAWAL', nowMs: 2 });
+    expect(denied.accountBalance).toBe(state.accountBalance);
+    expect(denied.cassetteCash).toBe(state.cassetteCash);
+    expect(denied.dispensedTotal).toBe(0);
+    expect(denied.lastDecision).toBe('BLOCK');
+    expect(denied.events.at(-1)?.title).toContain('no current matching permit');
+  });
+
+  it('rejects an expired permit without changing money state', () => {
+    const state = {
+      ...initialAtmState('protected'), screen: 'pending' as const, authenticated: true, service: 'withdrawal' as const,
+      pendingWithdrawal: { id: 'TX-2', amount: 1000, requestedAtMs: 1 },
+      simulationPermit: { id: 'P-1', transactionId: 'TX-2', amount: 1000, issuedAtMs: 1, expiresAtMs: 10, evidenceSource: 'SIMULATED' as const },
+      lastDecision: 'PERMIT' as const
+    };
+    const denied = atmReducer(state, { type: 'COMMIT_PENDING_WITHDRAWAL', nowMs: 11 });
+    expect(denied.accountBalance).toBe(state.accountBalance);
+    expect(denied.cassetteCash).toBe(state.cassetteCash);
+    expect(denied.dispensedTotal).toBe(0);
+    expect(denied.lastDecision).toBe('BLOCK');
+  });
+
+  it('keeps the intentionally unprotected dispense only in baseline simulation', () => {
+    let state = {
+      ...initialAtmState('baseline'), screen: 'pending' as const, authenticated: true, service: 'withdrawal' as const,
+      pendingWithdrawal: { id: 'BASE-1', amount: 2000, requestedAtMs: 1 }
+    };
+    state = atmReducer(state, { type: 'AUTHORIZE_PENDING_WITHDRAWAL', nowMs: 2 });
+    expect(state.simulationPermit).toBeNull();
+    expect(state.lastDecision).toBe('NONE');
+    state = atmReducer(state, { type: 'COMMIT_PENDING_WITHDRAWAL', nowMs: 3 });
+    expect(state.cassetteCash).toBe(48000);
+    expect(state.dispensedTotal).toBe(2000);
+  });});
 
 describe('virtual dispenser authority boundary', () => {
   it('blocks the controlled compromise fixture in protected mode', () => {
