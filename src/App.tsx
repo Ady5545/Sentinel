@@ -317,10 +317,29 @@ export default function App() {
         setPortMessage(hostMode.error || 'The host rejected the requested research mode.');
         return;
       }
-      dispatchResearch({ type: 'SET_MODE', mode: nextMode, runId: createResearchRunId(nextMode), at: Date.now() });
+      const snapshot = await api.getSerialReadiness();
+      const at = Date.now();
+      dispatchResearch({ type: 'SET_MODE', mode: nextMode, runId: createResearchRunId(nextMode), at });
+      dispatchResearch({
+        type: 'RESTORE_BRIDGE', mode: snapshot.researchMode, at,
+        boards: { uno: snapshot.boards.uno, sentinel: snapshot.boards.sentinel },
+        hilFaultLatched: snapshot.hilFaultLatched,
+        faultResetBaseline: snapshot.faultResetBaseline,
+        boardBootEpochs: snapshot.boardBootEpochs
+      });
+      setBoards(previous => ({
+        uno: { ...previous.uno, connected: snapshot.boards.uno.connected, path: snapshot.boards.uno.path,
+          sessionId: snapshot.boards.uno.sessionId, phase: snapshot.boards.uno.phase,
+          lastLineAt: snapshot.boards.uno.lastLineAt, readinessAt: snapshot.boards.uno.readinessAt },
+        sentinel: { ...previous.sentinel, connected: snapshot.boards.sentinel.connected, path: snapshot.boards.sentinel.path,
+          sessionId: snapshot.boards.sentinel.sessionId, phase: snapshot.boards.sentinel.phase,
+          lastLineAt: snapshot.boards.sentinel.lastLineAt, readinessAt: snapshot.boards.sentinel.readinessAt }
+      }));
       setPortMessage(nextMode === 'HIL'
         ? 'HIL mode enabled. Connect both boards, wait for fresh paired readiness, then commission the fictional account and cassette.'
-        : 'Software-only simulation mode restored. HIL-only serial commands are disabled at the host boundary.');
+        : (snapshot.hilFaultLatched
+          ? 'Software-only simulation mode restored. The completed HIL run is closed and the host latch now requires a paired reset before another HIL run.'
+          : 'Software-only simulation mode restored. HIL-only serial commands are disabled at the host boundary.'));
     } catch (error) {
       setPortMessage(error instanceof Error ? error.message : 'Research mode change failed.');
     }
