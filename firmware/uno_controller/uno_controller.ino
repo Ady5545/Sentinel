@@ -345,7 +345,7 @@ void resetCustomerSession() {
   else setAtmState(hasConfiguredAccount() ? ATM_IDLE : ATM_UNCOMMISSIONED);
 }
 
-void enterGuardianLock(const char *reason) {
+void enterGuardianLock(const __FlashStringHelper *reason) {
   const bool first = !guardianRevokeLatched;
   guardianRevokeLatched = true;
   guardianLink = LINK_REVOKED;
@@ -371,14 +371,14 @@ void sendHeartbeat(uint32_t now) {
   lastHeartbeatAt = now;
 }
 
-bool parsePayloadField(const char *payload, const char *key, char *out, size_t outSize) {
+bool parsePayloadField(const char *payload, const __FlashStringHelper *key, char *out, size_t outSize) {
   if (!payload || !key || !out || outSize < 2) return false;
-  const size_t keyLen = strlen(key);
+  const size_t keyLen = strlen_P((PGM_P)key);
   const char *cursor = payload;
   while (*cursor) {
     const char *end = strchr(cursor, ';');
     const size_t tokenLen = end ? (size_t)(end - cursor) : strlen(cursor);
-    if (tokenLen > keyLen && strncmp(cursor, key, keyLen) == 0 && cursor[keyLen] == '=') {
+    if (tokenLen > keyLen && strncmp_P(cursor, (PGM_P)key, keyLen) == 0 && cursor[keyLen] == '=') {
       const size_t valueLen = tokenLen - keyLen - 1;
       if (valueLen == 0 || valueLen >= outSize) return false;
       memcpy(out, cursor + keyLen + 1, valueLen);
@@ -393,7 +393,7 @@ bool parsePayloadField(const char *payload, const char *key, char *out, size_t o
 
 bool transactionIdMatches(const char *payload) {
   char id[12];
-  return parsePayloadField(payload, "id", id, sizeof(id)) &&
+  return parsePayloadField(payload, F("id"), id, sizeof(id)) &&
          txPendingId[0] && strcmp(id, txPendingId) == 0;
 }
 
@@ -432,7 +432,7 @@ bool makeNotePlan(uint32_t amount, uint16_t plan[4]) {
 void completeWithdrawal() {
   if (activeAccount < 0 || txPendingAmount == 0 ||
       atmState != ATM_WITHDRAW_PENDING || guardianRevokeLatched) {
-    enterGuardianLock("Permit arrived without a matching pending transaction.");
+    enterGuardianLock(F("Permit arrived without a matching pending transaction."));
     return;
   }
   Account &account = accounts[(uint8_t)activeAccount];
@@ -441,7 +441,7 @@ void completeWithdrawal() {
       cashInventory.notes200 < txPendingPlan[1] ||
       cashInventory.notes100 < txPendingPlan[2] ||
       cashInventory.notes50 < txPendingPlan[3]) {
-    enterGuardianLock("Local transaction preconditions changed before authorization.");
+    enterGuardianLock(F("Local transaction preconditions changed before authorization."));
     return;
   }
 
@@ -474,15 +474,15 @@ void handleGuardianLine(char *line) {
   char fields[5][48] = {{0}};
   uint32_t seq = 0;
   if (!parseFrame(line, fields, seq)) {
-    enterGuardianLock("Malformed guardian frame or CRC/version validation failure.");
+    enterGuardianLock(F("Malformed guardian frame or CRC/version validation failure."));
     return;
   }
   if (strcmp(fields[2], sessionId) != 0) {
-    enterGuardianLock("Guardian session mismatch.");
+    enterGuardianLock(F("Guardian session mismatch."));
     return;
   }
   if (seq != lastGuardianSequence + 1) {
-    enterGuardianLock("Guardian sequence gap, duplicate or stale frame.");
+    enterGuardianLock(F("Guardian sequence gap, duplicate or stale frame."));
     return;
   }
   lastGuardianSequence = seq;
@@ -492,7 +492,7 @@ void handleGuardianLine(char *line) {
 
   if (STREQ(type, "HELLO")) {
     if (!STRNEQ(payload, "ESP32-SENTINEL-V2", 17)) {
-      enterGuardianLock("Unexpected guardian protocol identity.");
+      enterGuardianLock(F("Unexpected guardian protocol identity."));
       return;
     }
     handshakeComplete = true;
@@ -502,7 +502,7 @@ void handleGuardianLine(char *line) {
     if (!statePublished) sendState();
   } else if (STREQ(type, "ACK")) {
     if (!handshakeComplete || !STREQ(payload, "HELLO_ACCEPTED")) {
-      enterGuardianLock("Unexpected guardian ACK.");
+      enterGuardianLock(F("Unexpected guardian ACK."));
       return;
     }
   } else if (STREQ(type, "STATUS")) {
@@ -510,13 +510,13 @@ void handleGuardianLine(char *line) {
     guardianLink = LINK_OBSERVING;
   } else if (STREQ(type, "PERMIT")) {
     if (!guardianFresh() || atmState != ATM_WITHDRAW_PENDING || !transactionIdMatches(payload)) {
-      enterGuardianLock("Permit missing freshness or did not match the pending transaction.");
+      enterGuardianLock(F("Permit missing freshness or did not match the pending transaction."));
       return;
     }
     completeWithdrawal();
   } else if (STREQ(type, "DENY")) {
     if (atmState != ATM_WITHDRAW_PENDING || !transactionIdMatches(payload)) {
-      enterGuardianLock("Denial did not match the pending transaction.");
+      enterGuardianLock(F("Denial did not match the pending transaction."));
       return;
     }
     ++txDeniedCount;
@@ -526,9 +526,9 @@ void handleGuardianLine(char *line) {
     memset(txPendingPlan, 0, sizeof(txPendingPlan));
     setAtmState(ATM_AUTHENTICATED);
   } else if (STREQ(type, "REVOKE")) {
-    enterGuardianLock("Guardian revoked controller authority.");
+    enterGuardianLock(F("Guardian revoked controller authority."));
   } else {
-    enterGuardianLock("Unknown guardian message type.");
+    enterGuardianLock(F("Unknown guardian message type."));
   }
 }
 
@@ -540,7 +540,7 @@ void pollGuardian() {
         rxBuffer[rxLength] = '\0';
         handleGuardianLine(rxBuffer);
       } else if (droppingLongFrame) {
-        enterGuardianLock("Overlong guardian frame discarded.");
+        enterGuardianLock(F("Overlong guardian frame discarded."));
       }
       rxLength = 0;
       droppingLongFrame = false;
@@ -737,7 +737,7 @@ void handleWithdraw(const char *amountText) {
     return;
   }
   if (!guardianFresh()) {
-    enterGuardianLock("Guardian link unavailable at withdrawal request.");
+    enterGuardianLock(F("Guardian link unavailable at withdrawal request."));
     return;
   }
   uint32_t amount = 0;
@@ -914,7 +914,7 @@ void loop() {
 
   if (handshakeComplete && lastGuardianFrameAt != 0 &&
       (uint32_t)(now - lastGuardianFrameAt) > GUARDIAN_TIMEOUT_MS) {
-    enterGuardianLock("Guardian response timeout.");
+    enterGuardianLock(F("Guardian response timeout."));
   }
 
   if (atmState == ATM_PIN_PENDING &&
@@ -931,7 +931,7 @@ void loop() {
       (uint32_t)(now - txPendingStartedAt) > 1800UL) {
     ++txDeniedCount;
     emitEvent(F("WITHDRAWAL_DENIED"), F("reason=guardian_decision_timeout"));
-    enterGuardianLock("No matching per-transaction guardian decision arrived.");
+    enterGuardianLock(F("No matching per-transaction guardian decision arrived."));
   }
   if (atmState == ATM_LOCKED) {
     bool anyLockout = false;
