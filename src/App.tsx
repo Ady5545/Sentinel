@@ -10,7 +10,8 @@ import {
 } from './core/atm-engine';
 import {
   canBeginHilWithdrawal, canClearHilFaultAfterPairedReset, parseKeyValueText, redactSensitiveSerialText, reduceHilTransaction,
-  reduceStructuredHilTransaction, type HilBoardResetEpochs, type HilTransaction
+  reduceStructuredHilTransaction, initialHilShadowState, invalidateHilShadow, reduceHilShadowObservation,
+  reconcileHilShadowCommit, type HilBoardResetEpochs, type HilShadowState, type HilTransaction
 } from './core/hil-evidence';
 import {
   createResearchRun, reduceResearchRun, replaySyntheticScenario, researchRunToJson,
@@ -67,6 +68,7 @@ export default function App() {
   const [boardBootEpochs, setBoardBootEpochs] = useState<HilBoardResetEpochs>({ uno: 0, sentinel: 0 });
   const [hilFaultResetBaseline, setHilFaultResetBaseline] = useState<HilBoardResetEpochs | null>(null);
   const [researchRun, setResearchRun] = useState<ResearchRunRecord>(() => createResearchRun('run-' + Date.now().toString(36), 'SOFTWARE_ONLY'));
+  const [hilShadow, setHilShadow] = useState<HilShadowState>(() => initialHilShadowState());
   const [scenarioRuns, setScenarioRuns] = useState<ResearchRunRecord[]>([]);
   const recordedAtmEventCount = useRef(0);
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -76,6 +78,14 @@ export default function App() {
     const handle = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(handle);
   }, []);
+
+  useEffect(() => {
+    if (hilTransaction?.phase === 'RECONCILED') {
+      setHilShadow(previous => reconcileHilShadowCommit(previous, hilTransaction));
+    } else if (hilTransaction && ['REVOKED', 'MISMATCH'].includes(hilTransaction.phase)) {
+      setHilShadow(previous => invalidateHilShadow(previous, hilTransaction.message));
+    }
+  }, [hilTransaction]);
 
   useEffect(() => {
     if (hilTransaction && ['REVOKED', 'MISMATCH'].includes(hilTransaction.phase)) {
@@ -150,10 +160,15 @@ export default function App() {
         setHilTransaction(previous => invalidateInFlightHilTransaction(previous, 'A new USB connection session was opened. Any unresolved HIL transaction must be reconciled before further action.'));
       } else if (event.kind === 'closed' || event.kind === 'error') {
         setHilTransaction(previous => invalidateInFlightHilTransaction(previous, 'Serial loss or malformed input invalidated board readiness. The active HIL transaction requires reconciliation before continuing.'));
+        setHilShadow(previous => invalidateHilShadow(previous, 'Serial loss invalidated the commissioned desktop HIL cash shadow; recommission and reconcile before another protected run.'));
       }
       if (event.kind === 'line' && event.parsed?.type === 'BOARD_BOOT') {
         setBoardBootEpochs(previous => ({ ...previous, [event.device]: previous[event.device] + 1 }));
         setHilTransaction(previous => invalidateInFlightHilTransaction(previous, 'A board boot/session-start record was observed. Previous readiness and any unresolved transaction are invalidated.'));
+        setHilShadow(previous => invalidateHilShadow(previous, 'Board reboot/session-start invalidated the commissioned desktop HIL cash shadow.'));
+      }
+      if (event.kind === 'line' && event.device === 'uno' && event.line) {
+        setHilShadow(previous => reduceHilShadowObservation(previous, redactSensitiveSerialText(event.line || '')));
       }
       if (event.kind === 'line' && event.parsed?.type === 'ATM_EVENT' && event.parsed.eventName === 'WITHDRAWAL_PENDING') {
         setHilTransactionStartedAt(event.at || Date.now());
@@ -285,6 +300,7 @@ export default function App() {
       mode: state.mode,
       researchRun: JSON.parse(researchRunToJson(researchRun)),
       syntheticScenarioRuns: scenarioRuns.map(run => JSON.parse(researchRunToJson(run))),
+      hilVirtualCashShadow: hilShadow,
       evidenceProvenance: 'MIXED: simulated software state plus board-reported USB console text; no cryptographic hardware attestation',
       researchLimit: 'Virtual ATM only. No real cash, bank connection, or physical dispenser.',
       summary: { accountId: state.accountId, accountBalance: state.accountBalance, cassetteCash: state.cassetteCash, dispensedTotal: state.dispensedTotal, controllerState: state.controllerState, sentinelStatus: state.sentinelStatus, lastDecision: state.lastDecision, findings: state.findings },
@@ -414,7 +430,7 @@ export default function App() {
         {view === 'sentinel' && <SentinelView state={state} boards={boards} />}
         {view === 'experiments' && <><ExperimentView state={state} dispatch={dispatch} /><ResearchRunPanel run={researchRun} scenarioRuns={scenarioRuns} onReplay={replayScenario} /></>}
         {view === 'journal' && <JournalView events={combinedJournalEvents} alerts={alerts} onExport={exportEvidence} researchRun={researchRun} />}
-        {view === 'hardware' && <HardwareView ports={ports} chosenPort={chosenPort} setChosenPort={setChosenPort} boards={boards} message={portMessage} serialEvents={serialEvents} refresh={refreshPorts} connect={connectBoard} disconnect={disconnectBoard} sendCommand={sendBoardCommand} sendTypedCommand={(command) => sendTypedBoardCommand('uno', command)} researchMode={researchRun.mode} researchPhase={researchRun.phase} hilTransaction={hilTransaction} boardBootEpochs={boardBootEpochs} hilFaultResetBaseline={hilFaultResetBaseline} nowMs={nowMs} clearHilTransaction={() => { setHilTransaction(null); setHilTransactionStartedAt(null); setHilFaultResetBaseline(null); }} />}
+        {view === 'hardware' && <HardwareView ports={ports} chosenPort={chosenPort} setChosenPort={setChosenPort} boards={boards} message={portMessage} serialEvents={serialEvents} refresh={refreshPorts} connect={connectBoard} disconnect={disconnectBoard} sendCommand={sendBoardCommand} sendTypedCommand={(command) => sendTypedBoardCommand('uno', command)} researchMode={researchRun.mode} researchPhase={researchRun.phase} hilShadow={hilShadow} hilTransaction={hilTransaction} boardBootEpochs={boardBootEpochs} hilFaultResetBaseline={hilFaultResetBaseline} nowMs={nowMs} clearHilTransaction={() => { setHilTransaction(null); setHilTransactionStartedAt(null); setHilFaultResetBaseline(null); }} />}
         <footer className="status-footer"><span><i /> DOMAIN CORE ACTIVE</span><span>{eventCount.toString().padStart(3,'0')} EVENTS · {alerts.toString().padStart(2,'0')} ALERTS</span><span>FICTIONAL ACCOUNT · VIRTUAL CASH · RESEARCH PROTOTYPE</span></footer>
       </div>
     </main>
@@ -591,6 +607,7 @@ function HILOperatorControls({ pairReady, unoConnected, sendCommand, researchMod
   sendCommand: (command: UnoOperatorCommand) => Promise<{ ok: boolean; error?: string; commandName?: string; sensitive?: boolean }>;
   researchMode: ResearchRunRecord['mode'];
   researchPhase: ResearchRunRecord['phase'];
+  hilShadow: HilShadowState;
   hilTransaction: HilTransaction | null;
 }) {
   const customerOpsAllowed = pairReady && researchMode === 'HIL' && researchPhase === 'ACTIVE' && canBeginHilWithdrawal(hilTransaction);
@@ -689,7 +706,7 @@ function HILOperatorControls({ pairReady, unoConnected, sendCommand, researchMod
   </>;
 }
 
-function HardwareView({ ports, chosenPort, setChosenPort, boards, message, serialEvents, refresh, connect, disconnect, sendCommand, sendTypedCommand, researchMode, researchPhase, hilTransaction, boardBootEpochs, hilFaultResetBaseline, nowMs, clearHilTransaction }: {
+function HardwareView({ ports, chosenPort, setChosenPort, boards, message, serialEvents, refresh, connect, disconnect, sendCommand, sendTypedCommand, researchMode, researchPhase, hilShadow, hilTransaction, boardBootEpochs, hilFaultResetBaseline, nowMs, clearHilTransaction }: {
   ports: Port[]; chosenPort: Record<DeviceKey, string>;
   setChosenPort: Dispatch<SetStateAction<Record<DeviceKey, string>>>;
   boards: Record<DeviceKey, BoardState>; message: string; serialEvents: string[];
@@ -759,6 +776,10 @@ function HardwareView({ ports, chosenPort, setChosenPort, boards, message, seria
       <div className="authority-row"><span>ESP32 guardian state</span><b className={phaseForDisplay('sentinel') === 'OBSERVING' ? 'green-text' : phaseForDisplay('sentinel') === 'REVOKED' || phaseForDisplay('sentinel') === 'ERROR' || phaseForDisplay('sentinel') === 'STALE' ? 'red-text' : ''}>{phaseForDisplay('sentinel')}</b></div>
       <div className="authority-row"><span>Protected HIL</span><b className={pairReady ? 'green-text' : 'red-text'}>{pairReady ? 'OBSERVED READY' : 'NOT READY — DENY'}</b></div>
       <p className="muted-note">Readiness is inferred from specific serial-console lines and is still board-reported, not cryptographic attestation. The application fails closed when these lines are missing.</p>
+      <div className="authority-row"><span>Desktop virtual-cash shadow</span><b className={hilShadow.status === 'COMMISSIONED' ? 'green-text' : 'red-text'}>{hilShadow.status}</b></div>
+      <div className="authority-row"><span>Shadow balance / cassette</span><b>{money(hilShadow.accountBalance)} / {money(hilShadow.cassetteCash)}</b></div>
+      <div className="authority-row"><span>Shadow dispensed total</span><b>{money(hilShadow.dispensedTotal)}</b></div>
+      {hilShadow.error && <p className="muted-note">{hilShadow.error}</p>}
     </section>
     <div className="board-grid">{(['uno','sentinel'] as DeviceKey[]).map((device,index) => {
       const board = boards[device];
