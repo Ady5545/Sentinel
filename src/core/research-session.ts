@@ -58,6 +58,9 @@ type ParsedSerialKind = 'opened' | 'closed' | 'error' | 'line' | 'command-writte
 
 export type ResearchSessionAction =
   | { type: 'SET_MODE'; mode: ResearchMode; runId: string; at: number }
+  | { type: 'RESTORE_BRIDGE'; mode: ResearchMode; boards: Record<BoardDevice, { connected: boolean; sessionId?: string; phase: string; readinessAt: number }>; at: number }
+  | { type: 'HIL_TIMEOUT'; at: number }
+  | { type: 'CLEAR_TRANSACTION'; at: number }
   | {
       type: 'BOARD_EVENT';
       kind: ParsedSerialKind;
@@ -269,6 +272,56 @@ export function researchSessionReducer(
     return appendRecord(next, action.at, 'SYSTEM', 'RUN_STARTED', 'HOST_DERIVED', {
       schemaVersion: 1, mode: action.mode, runId: action.runId,
       evidenceLimit: 'A mode/run change does not reset connected firmware; board sessions remain explicitly recorded.'
+    });
+  }
+
+  if (action.type === 'RESTORE_BRIDGE') {
+    const boardSessions = {
+      uno: action.boards.uno.connected ? action.boards.uno.sessionId || null : null,
+      sentinel: action.boards.sentinel.connected ? action.boards.sentinel.sessionId || null : null
+    };
+    const readinessPhase = {
+      uno: action.boards.uno.connected && action.boards.uno.phase === 'HEALTHY' ? 'HEALTHY' as const : null,
+      sentinel: action.boards.sentinel.connected && action.boards.sentinel.phase === 'OBSERVING' ? 'OBSERVING' as const : null
+    };
+    const readinessAt = {
+      uno: readinessPhase.uno ? action.boards.uno.readinessAt : 0,
+      sentinel: readinessPhase.sentinel ? action.boards.sentinel.readinessAt : 0
+    };
+    const next: ResearchSessionState = {
+      ...state, mode: action.mode, boardSessions, readinessPhase, readinessAt
+    };
+    return appendRecord(next, action.at, 'HOST', 'BRIDGE_SNAPSHOT_RESTORED', 'HOST_DERIVED', {
+      researchMode: action.mode,
+      unoConnected: action.boards.uno.connected, unoPhase: action.boards.uno.phase,
+      sentinelConnected: action.boards.sentinel.connected, sentinelPhase: action.boards.sentinel.phase,
+      shadowStatus: state.hilShadow.status,
+      note: 'Readiness snapshot restored from the host. RAM-only HIL shadow is not inferred from USB connection data.'
+    });
+  }
+
+  if (action.type === 'HIL_TIMEOUT') {
+    const tx = state.hilTransaction;
+    if (!tx || TERMINAL_PHASES.has(tx.phase) || action.at - tx.startedAtMs < 8000) return state;
+    const timedOut: CoordinatedHilTransaction = {
+      ...tx, phase: 'MISMATCH',
+      message: 'HIL reconciliation timed out after 8 seconds. No shadow cash mutation was performed.'
+    };
+    return latchFault({ ...state, hilTransaction: timedOut }, action.at, 'HOST',
+      'HIL_RECONCILIATION_TIMEOUT', { transactionId: tx.id, amount: tx.amount, runId: tx.runId },
+      timedOut.message);
+  }
+
+  if (action.type === 'CLEAR_TRANSACTION') {
+    const tx = state.hilTransaction;
+    if (!tx || !RECONCILABLE_PHASES.has(tx.phase)) {
+      return appendRecord(state, action.at, 'SYSTEM', 'TRANSACTION_CLEAR_BLOCKED', 'HOST_DERIVED', {
+        phase: tx?.phase || 'NONE', reason: 'Only reconciled or denied HIL records may be dismissed from the active view.'
+      });
+    }
+    let next: ResearchSessionState = { ...state, hilTransaction: null };
+    return appendRecord(next, action.at, 'SYSTEM', 'TRANSACTION_VIEW_CLEARED', 'HOST_DERIVED', {
+      transactionId: tx.id, phase: tx.phase, reason: 'The immutable run ledger retains the transaction evidence.'
     });
   }
 
