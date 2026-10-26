@@ -123,6 +123,19 @@ test("guardian commit-reconciliation log includes the exact validated transactio
   assert.ok(esp.includes('strcmp(id, pendingPermitId) != 0'));
 });
 
+test("TX_COMMITTED delivery retries preserve the original frame and duplicate reports replay ACK idempotently", () => {
+  assert.ok(uno.includes("txCommitAttempts >= COMMIT_REPORT_MAX_ATTEMPTS"));
+  assert.ok(uno.includes("sendFrameAtSequence(F(\"EVENT\"), commitPayload, txCommitEventSequence)"));
+  assert.ok(uno.includes("Retrying identical EVENT sequence="));
+  const duplicateStart = esp.indexOf('if (strcmp(type, "EVENT") == 0 && lastCommittedEventSequence != 0');
+  assert.notEqual(duplicateStart, -1);
+  const duplicateEnd = esp.indexOf("\n  }", duplicateStart);
+  assert.notEqual(duplicateEnd, -1);
+  const duplicateBranch = esp.slice(duplicateStart, duplicateEnd);
+  assert.ok(duplicateBranch.includes('sendFrameAtSequence("ACK", lastCommitAckPayload, lastCommitAckSequence)'));
+  assert.ok(!duplicateBranch.includes("++committedTransactions"));
+});
+
 test("Uno reports exact virtual cassette counts and total for the desktop shadow", () => {
   assert.ok(uno.includes('notes500=%lu;notes200=%lu;notes100=%lu;notes50=%lu;total=%lu'));
   assert.ok(uno.includes('emitEvent(F("CASH_CONFIGURED"), details);'));
