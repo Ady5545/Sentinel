@@ -554,7 +554,16 @@ export function researchSessionReducer(
     }
 
     if (reduced.phase === 'MISMATCH' || reduced.phase === 'REVOKED') {
-      next = { ...next, hilTransaction: reduced as CoordinatedHilTransaction };
+      const faultTransaction: CoordinatedHilTransaction = priorTx && 'runId' in priorTx
+        ? reduced as CoordinatedHilTransaction
+        : {
+            ...reduced,
+            runId: next.runId,
+            unoSessionId: next.boardSessions.uno || '',
+            sentinelSessionId: next.boardSessions.sentinel || '',
+            startedAtMs: action.at
+          };
+      next = { ...next, hilTransaction: faultTransaction };
       next = latchFault(next, action.at, source, 'HIL_TRANSACTION_FAULT', {
         transactionId: reduced.id, amount: reduced.amount, phase: reduced.phase
       }, reduced.message);
