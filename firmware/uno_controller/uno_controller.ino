@@ -229,6 +229,11 @@ bool parseFrame(char *line, char fields[5][48], uint32_t &seqOut) {
   if (len < 12 || len > FRAME_MAX - 2) return false;
   char *lastSep = strrchr(line, '|');
   if (!lastSep || strlen(lastSep + 1) != 4) return false;
+  for (const char *digit = lastSep + 1; *digit; ++digit) {
+    if (!((*digit >= '0' && *digit <= '9') ||
+          (*digit >= 'A' && *digit <= 'F') ||
+          (*digit >= 'a' && *digit <= 'f'))) return false;
+  }
   char *end = NULL;
   const unsigned long receivedCrc = strtoul(lastSep + 1, &end, 16);
   if (!end || *end != '\0' || receivedCrc > 0xFFFF) return false;
