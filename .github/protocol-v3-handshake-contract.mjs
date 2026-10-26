@@ -8,7 +8,7 @@ const protocol = await readFile(new URL("../docs/SENTINEL_PROTOCOL.md", import.m
 
 test("both endpoints use S3 framing and V3 identities", () => {
   assert.match(uno, /PSTR\("S3\|%S\|%s\|%lu\|%s"\)/);
-  assert.match(uno, /STREQ\(fields\[0\], "S3"\)/);
+  assert.match(uno, /STREQ\(f\[0\],"S3"\)/);
   assert.match(esp, /"S3\|%s\|%s\|%lu\|%s"/);
   assert.match(esp, /strcmp\(fields\[0\], "S3"\) != 0/);
   assert.match(uno, /UNO-ATM-V3/);
@@ -18,15 +18,15 @@ test("both endpoints use S3 framing and V3 identities", () => {
 });
 
 test("retries preserve startup message identities instead of incrementing sequence counters", () => {
-  assert.ok((uno.match(/sendFrameAtSequence\(F\("HELLO"\), F\("UNO-ATM-V3"\), 1\)/g) ?? []).length >= 2);
-  assert.match(uno, /sendFrameAtSequence\(F\("ACK"\), F\("HELLO_ACCEPTED"\), 2\)/);
+  assert.ok((uno.match(/sendFrameAt\(F\("HELLO"\),F\("UNO-ATM-V3"\),1\)/g) ?? []).length >= 2);
+  assert.match(uno, /sendFrameAt\(F\("ACK"\),F\("HELLO_ACCEPTED"\),2\)/);
   assert.ok((esp.match(/sendFrameAtSequence\("HELLO", "ESP32-SENTINEL-V3", 1\)/g) ?? []).length >= 2);
   assert.match(esp, /sendFrameAtSequence\("ACK", "HELLO_ACCEPTED", 2\)/);
 });
 
 test("exact handshake duplicates are handled before strict sequence progression", () => {
-  const unoDuplicate = uno.indexOf('if (guardianHelloSeen && seq == 1 && STREQ(type, "HELLO")');
-  const unoSequenceCheck = uno.indexOf("if (seq != lastGuardianSequence + 1UL)");
+  const unoDuplicate = uno.indexOf('if(guardianHelloSeen && seq==1 && STREQ(type,"HELLO")');
+  const unoSequenceCheck = uno.indexOf("if(seq!=lastGuardianSequence+1UL)");
   assert.ok(unoDuplicate >= 0 && unoSequenceCheck > unoDuplicate, "Uno duplicate HELLO must be idempotent before sequence-gap enforcement");
   const espDuplicate = esp.indexOf('if (strcmp(type, "HELLO") == 0 && seq == initialUnoHelloSequence');
   const espSequenceCheck = esp.indexOf("if (seq != lastUnoSequence + 1UL)");
@@ -34,12 +34,12 @@ test("exact handshake duplicates are handled before strict sequence progression"
 });
 
 test("Uno is not ready after the first guardian HELLO; final ACK completes the handshake", () => {
-  const helloBranch = uno.indexOf('if (STREQ(type, "HELLO"))');
-  const ackBranch = uno.indexOf('if (STREQ(type, "ACK"))');
-  const readySet = uno.indexOf("handshakeComplete = true;", helloBranch);
+  const helloBranch = uno.indexOf('if(STREQ(type,"HELLO"))');
+  const ackBranch = uno.indexOf('} else if(STREQ(type,"ACK"))');
+  const readySet = uno.indexOf("handshakeComplete=true;", helloBranch);
   assert.ok(helloBranch >= 0 && ackBranch > helloBranch && readySet > ackBranch);
-  assert.match(uno.slice(helloBranch, ackBranch), /sendFrameAtSequence\(F\("ACK"\), F\("HELLO_ACCEPTED"\), 2\)/);
-  assert.doesNotMatch(uno.slice(helloBranch, ackBranch), /handshakeComplete = true/);
+  assert.match(uno.slice(helloBranch, ackBranch), /sendFrameAt\(F\("ACK"\),F\("HELLO_ACCEPTED"\),2\)/);
+  assert.doesNotMatch(uno.slice(helloBranch, ackBranch), /handshakeComplete=true/);
 });
 
 test("ESP32 gates transaction requests on completed negotiation", () => {
@@ -62,11 +62,11 @@ test("protocol documentation requires a matched pair and idempotent retries", ()
 
 test("Uno serializes heartbeat/status traffic for SoftwareSerial", () => {
   assert.match(uno, /bool awaitingGuardianStatus = false;/);
-  assert.match(uno, /awaitingGuardianStatus = true;/);
-  assert.match(uno, /if \(!awaitingGuardianStatus &&[\s\S]*sendHeartbeat\(now\)/);
-  const statusBranch = uno.indexOf('if (STREQ(type, "STATUS"))');
+  assert.match(uno, /awaitingGuardianStatus=true;/);
+  assert.match(uno, /!awaitingGuardianStatus[\s\S]*sendHeartbeat\(now\)/);
+  const statusBranch = uno.indexOf('} else if(STREQ(type,"STATUS"))');
   assert.ok(statusBranch >= 0, "Uno must have a STATUS receive branch");
-  assert.match(uno.slice(statusBranch, statusBranch + 500), /awaitingGuardianStatus = false/);
+  assert.match(uno.slice(statusBranch, statusBranch + 420), /awaitingGuardianStatus=false;/);
   assert.match(esp, /if \(!revokeLatched\) sendFrame\("STATUS", "HEALTHY"\);/);
   assert.match(protocol, /at most one outstanding HEARTBEAT/i);
   assert.match(protocol, /waits for STATUS before sending the next heartbeat/i);
