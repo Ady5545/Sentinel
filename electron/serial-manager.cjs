@@ -6,7 +6,8 @@ const SIMPLE_COMMANDS = {
   uno: new Set(['BALANCE', 'CANCEL', 'LOGOUT', 'STATUS', 'JOURNAL', 'HELP', 'FIXTURE_MISMATCH']),
   sentinel: new Set(['STATUS', 'FIXTURE_REVOKE', 'HELP'])
 };
-const PROTECTED_PAIR_COMMANDS = new Set(['CARD', 'PIN', 'BALANCE', 'WITHDRAW', 'CHANGE_PIN', 'FIXTURE_MISMATCH']);
+const PROTECTED_PAIR_COMMANDS = new Set(['ADD_ACCOUNT', 'SET_CASH', 'SET_POLICY', 'SET_LIMITS', 'CARD', 'PIN', 'BALANCE', 'WITHDRAW', 'CHANGE_PIN', 'FIXTURE_MISMATCH', 'FIXTURE_REVOKE', 'CANCEL', 'LOGOUT']);
+const HIL_ONLY_COMMANDS = new Set(PROTECTED_PAIR_COMMANDS);
 const VALID_ROLES = new Set(['uno', 'sentinel']);
 const READINESS_TTL_MS = 3500;
 const MAX_LINE_LENGTH = 2048;
@@ -185,6 +186,7 @@ class SerialManager extends EventEmitter {
     this.devices = new Map();
     this.maxLineLength = options.maxLineLength || MAX_LINE_LENGTH;
     this.freshnessMs = options.freshnessMs || READINESS_TTL_MS;
+    this.researchMode = 'SIMULATION';
     this.now = options.now || (() => Date.now());
     this.listPortsProvider = options.listPorts || (() => SerialPort.list());
     this.createPort = options.createPort || (config => new SerialPort(config));
@@ -262,6 +264,13 @@ class SerialManager extends EventEmitter {
     });
   }
 
+  setResearchMode(mode) {
+    if (mode !== 'SIMULATION' && mode !== 'HIL') return { ok: false, error: 'Unknown research mode.' };
+    this.researchMode = mode;
+    this.emit('event', { kind: 'research-mode', mode, message: mode === 'HIL' ? 'Hardware-in-the-loop commands enabled subject to paired readiness.' : 'Software-only simulation mode; HIL-only board commands are disabled.' });
+    return { ok: true, mode };
+  }
+
   getReadinessSnapshot() {
     const boards = {};
     for (const device of ['uno', 'sentinel']) {
@@ -292,7 +301,7 @@ class SerialManager extends EventEmitter {
       uno.readinessAt > 0 && sentinel.readinessAt > 0 &&
       this.now() - uno.readinessAt <= this.freshnessMs &&
       this.now() - sentinel.readinessAt <= this.freshnessMs;
-    return { pairReady, freshnessMs: this.freshnessMs, boards };
+    return { pairReady, freshnessMs: this.freshnessMs, researchMode: this.researchMode, boards };
   }
 
   isPairReady() {
@@ -305,6 +314,9 @@ class SerialManager extends EventEmitter {
     const state = this.devices.get(device);
     if (!state || state.closed || state.failed || !state.connected || !state.port.isOpen) {
       throw new Error(device.toUpperCase() + ' serial port is not open.');
+    }
+    if (HIL_ONLY_COMMANDS.has(validation.commandName) && this.researchMode !== 'HIL') {
+      throw new Error('HIL-only command denied: switch the desktop to explicit HIL mode first.');
     }
     if (PROTECTED_PAIR_COMMANDS.has(validation.commandName) && !this.isPairReady()) {
       throw new Error('Protected command denied: both board roles must have fresh HEALTHY/OBSERVING reports. Connection alone is not readiness.');
@@ -444,5 +456,5 @@ class SerialManager extends EventEmitter {
 
 module.exports = {
   SerialManager, validateBoardCommand, normalizeCommandRequest, parseBoardLine, redactSensitiveSerialText,
-  READINESS_TTL_MS, PROTECTED_PAIR_COMMANDS
+  READINESS_TTL_MS, PROTECTED_PAIR_COMMANDS, HIL_ONLY_COMMANDS
 };
