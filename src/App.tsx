@@ -31,6 +31,7 @@ const initialBoards: Record<DeviceKey, BoardState> = {
 };
 const money = (value: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(value);
 const clock = () => new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+const HIL_RECONCILIATION_TIMEOUT_MS = 8000;
 
 function invalidateInFlightHilTransaction(current: HilTransaction | null, message: string): HilTransaction | null {
   if (!current || ['RECONCILED', 'DENIED', 'REVOKED', 'MISMATCH'].includes(current.phase)) return current;
@@ -50,6 +51,7 @@ export default function App() {
   const [runtime, setRuntime] = useState<{ platform: string; version: string; packaged: boolean } | null>(null);
   const [serialEvents, setSerialEvents] = useState<string[]>([]);
   const [hilTransaction, setHilTransaction] = useState<HilTransaction | null>(null);
+  const [hilTransactionStartedAt, setHilTransactionStartedAt] = useState<number | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [portMessage, setPortMessage] = useState('Board access is optional. The virtual ATM works without hardware.');
 
@@ -57,6 +59,21 @@ export default function App() {
     const handle = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(handle);
   }, []);
+
+  useEffect(() => {
+    if (!hilTransaction || ['RECONCILED', 'DENIED', 'REVOKED', 'MISMATCH'].includes(hilTransaction.phase)) {
+      if (hilTransactionStartedAt !== null) setHilTransactionStartedAt(null);
+      return;
+    }
+    if (hilTransactionStartedAt === null) {
+      setHilTransactionStartedAt(nowMs);
+      return;
+    }
+    if (nowMs - hilTransactionStartedAt >= HIL_RECONCILIATION_TIMEOUT_MS) {
+      setHilTransaction(previous => invalidateInFlightHilTransaction(previous,
+        'HIL reconciliation timed out after 8 seconds. No desktop cash mutation was performed; reset/reconnect and reconcile the boards before another protected run.'));
+    }
+  }, [hilTransaction, hilTransactionStartedAt, nowMs]);
 
   useEffect(() => {
     const api = window.sentinelDesktop;
@@ -80,6 +97,9 @@ export default function App() {
       }
       if (event.kind === 'line' && event.parsed?.type === 'BOARD_BOOT') {
         setHilTransaction(previous => invalidateInFlightHilTransaction(previous, 'A board boot/session-start record was observed. Previous readiness and any unresolved transaction are invalidated.'));
+      }
+      if (event.kind === 'line' && event.parsed?.type === 'ATM_EVENT' && event.parsed.eventName === 'WITHDRAWAL_PENDING') {
+        setHilTransactionStartedAt(event.at || Date.now());
       }
       if (event.kind === 'line' && event.line) {
         setHilTransaction(previous => event.parsed
@@ -279,7 +299,7 @@ export default function App() {
         {view === 'sentinel' && <SentinelView state={state} boards={boards} />}
         {view === 'experiments' && <ExperimentView state={state} dispatch={dispatch} />}
         {view === 'journal' && <JournalView events={combinedJournalEvents} alerts={alerts} onExport={exportEvidence} />}
-        {view === 'hardware' && <HardwareView ports={ports} chosenPort={chosenPort} setChosenPort={setChosenPort} boards={boards} message={portMessage} serialEvents={serialEvents} refresh={refreshPorts} connect={connectBoard} disconnect={disconnectBoard} sendCommand={sendBoardCommand} hilTransaction={hilTransaction} nowMs={nowMs} clearHilTransaction={() => setHilTransaction(null)} />}
+        {view === 'hardware' && <HardwareView ports={ports} chosenPort={chosenPort} setChosenPort={setChosenPort} boards={boards} message={portMessage} serialEvents={serialEvents} refresh={refreshPorts} connect={connectBoard} disconnect={disconnectBoard} sendCommand={sendBoardCommand} hilTransaction={hilTransaction} nowMs={nowMs} clearHilTransaction={() => { setHilTransaction(null); setHilTransactionStartedAt(null); }} />}
         <footer className="status-footer"><span><i /> DOMAIN CORE ACTIVE</span><span>{eventCount.toString().padStart(3,'0')} EVENTS · {alerts.toString().padStart(2,'0')} ALERTS</span><span>FICTIONAL ACCOUNT · VIRTUAL CASH · RESEARCH PROTOTYPE</span></footer>
       </div>
     </main>
