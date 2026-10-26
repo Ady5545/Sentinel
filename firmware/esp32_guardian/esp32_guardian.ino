@@ -37,6 +37,7 @@ char sessionId[13] = {0};
 char rxBuffer[FRAME_MAX];
 size_t rxLength = 0;
 bool droppingLongFrame = false;
+uint32_t startupNoiseDrops = 0;
 char usbBuffer[USB_LINE_MAX];
 size_t usbLength = 0;
 bool droppingUsbLine = false;
@@ -445,9 +446,23 @@ void handleRequest(const char *payload) {
 }
 
 void handleUnoLine(char *line) {
+  // A latched revocation is terminal until both boards are reset. Never let a
+  // later HELLO overwrite REVOKED with NEGOTIATING.
+  if (revokeLatched) return;
+
   char fields[5][48] = {{0}};
   uint32_t seq = 0;
   if (!parseFrame(line, fields, seq)) {
+    // UART startup can expose a partial/noisy line before the first valid
+    // session. Drop that pre-session noise; after session establishment,
+    // malformed frames remain fail-closed and latch revocation.
+    if (!sessionEstablished) {
+      ++startupNoiseDrops;
+      if (startupNoiseDrops == 1 || startupNoiseDrops % 5UL == 0) {
+        Serial.println(F("[LINK_DROP] Ignoring malformed pre-session UART noise; waiting for valid UNO HELLO."));
+      }
+      return;
+    }
     revoke("Malformed frame, overlong input, CRC or protocol-version failure.");
     return;
   }
@@ -556,7 +571,14 @@ void pollUno() {
         rxBuffer[rxLength] = '\0';
         handleUnoLine(rxBuffer);
       } else if (droppingLongFrame) {
-        revoke("Overlong UNO frame discarded.");
+        if (sessionEstablished) {
+          revoke("Overlong UNO frame discarded.");
+        } else {
+          ++startupNoiseDrops;
+          if (startupNoiseDrops == 1 || startupNoiseDrops % 5UL == 0) {
+            Serial.println(F("[LINK_DROP] Ignoring overlong pre-session UART noise; waiting for valid UNO HELLO."));
+          }
+        }
       }
       rxLength = 0;
       droppingLongFrame = false;
