@@ -21,6 +21,51 @@ export interface HilTransaction {
 
 export type BoardRole = 'uno' | 'sentinel';
 
+export interface StructuredBoardEvent {
+  type: string;
+  eventName?: string;
+  id?: string;
+  amount?: number;
+  balance?: number;
+  reason?: string;
+}
+
+/**
+ * Reduce only whitelisted, already-redacted host parser fields into the HIL lifecycle.
+ * This is structured correlation of board-reported evidence, not device attestation.
+ */
+export function reduceStructuredHilTransaction(
+  current: HilTransaction | null,
+  device: BoardRole,
+  event: StructuredBoardEvent
+): HilTransaction | null {
+  const amount = event.amount === undefined ? 'INVALID' : String(event.amount);
+  const id = event.id || '';
+  if (event.type === 'ATM_EVENT' && event.eventName) {
+    return reduceHilTransaction(
+      current,
+      device,
+      'ATM_EVENT|' + event.eventName + '|id=' + id + ';amount=' + amount +
+        (event.balance === undefined ? '' : ';balance=' + event.balance)
+    );
+  }
+  if (event.type === 'PERMIT') {
+    return reduceHilTransaction(current, device, '[PERMIT] One-shot observation issued for ' + id + ';amount=' + amount);
+  }
+  if (event.type === 'DENY') {
+    return reduceHilTransaction(current, device, '[DENY] id=' + id + ';amount=' + amount +
+      (event.reason ? ';reason=' + redactSensitiveSerialText(event.reason) : ''));
+  }
+  if (event.type === 'COMMIT_RECONCILIATION') {
+    return reduceHilTransaction(current, device,
+      '[AUDIT] Matching controller-reported virtual transaction commit observed;id=' + id + ';amount=' + amount);
+  }
+  if (event.type === 'AUTHORITY_REVOKED') {
+    return reduceHilTransaction(current, device, '[REVOKE]');
+  }
+  return current;
+}
+
 export function parseKeyValueText(value: string): Record<string, string> {
   return Object.fromEntries(value.split(';')
     .map(part => {
@@ -187,6 +232,26 @@ export function reduceHilTransaction(
 
 export function canBeginHilWithdrawal(current: HilTransaction | null): boolean {
   return current === null || current.phase === 'RECONCILED' || current.phase === 'DENIED';
+}
+
+export type HilBoardResetEpochs = { uno: number; sentinel: number };
+
+/**
+ * A mismatch/revocation cannot be cleared just because healthy status reappears.
+ * Both controllers must have emitted a new boot/session-start record after the
+ * fault was latched, then the host must observe the fresh paired-ready state.
+ */
+export function canClearHilFaultAfterPairedReset(
+  phase: HilTransactionPhase,
+  pairReady: boolean,
+  faultBaseline: HilBoardResetEpochs | null,
+  currentEpochs: HilBoardResetEpochs
+): boolean {
+  return (phase === 'MISMATCH' || phase === 'REVOKED') &&
+    pairReady &&
+    faultBaseline !== null &&
+    currentEpochs.uno > faultBaseline.uno &&
+    currentEpochs.sentinel > faultBaseline.sentinel;
 }
 
 export function redactSensitiveSerialText(line: string): string {

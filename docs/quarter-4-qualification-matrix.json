@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "project": "SENTINEL Research Environment",
+  "purpose": "Track release qualification honestly. Only mark PASS with attributable evidence from the exact tested source commit.",
+  "sourceCommit": null,
+  "rule": "Never change NOT_RUN to PASS from compilation, synthetic replay, screenshots alone, or a host-reported readiness string.",
+  "checks": [
+    {
+      "id": "automated-suite",
+      "title": "Electron checks, Node serial tests, domain tests, TypeScript and Vite build",
+      "status": "PENDING",
+      "evidence": []
+    },
+    {
+      "id": "macos-arm64-package",
+      "title": "macOS Apple Silicon DMG and ZIP produced for the pinned commit",
+      "status": "PENDING",
+      "evidence": []
+    },
+    {
+      "id": "windows-x64-package",
+      "title": "Windows x64 installer and ZIP produced for the pinned commit",
+      "status": "PENDING",
+      "evidence": []
+    },
+    {
+      "id": "artifact-checksums",
+      "title": "SHA-256 manifest verifies all packaged files and names the same source commit",
+      "status": "PENDING",
+      "evidence": []
+    },
+    {
+      "id": "macos-offline-launch",
+      "title": "Installed macOS app launches with network disconnected and software-only simulation works",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "windows-offline-launch",
+      "title": "Installed Windows app launches with network disconnected and software-only simulation works",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "usb-absent-simulation",
+      "title": "App remains usable in software-only mode with both boards absent",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "physical-logic-level",
+      "title": "Verify common ground and Uno TX divider before ESP32 RX; no 5 V Uno TX direct to ESP32 GPIO",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "paired-start-reconnect",
+      "title": "Paired Uno/ESP32 startup, unplug, replug, session change and readiness-loss matrix",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "one-hundred-clean-starts",
+      "title": "Record 100 clean paired starts/resets with run IDs and redacted logs",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "thirty-minute-idle",
+      "title": "Thirty-minute paired idle observation with timestamps and any reset/error notes",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "allowed-withdrawal",
+      "title": "Allowed fictional withdrawal: exact ID/amount, permit, Uno commit and guardian reconciliation; once only",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "denied-withdrawal",
+      "title": "Denied/mismatched/revoked withdrawal: no desktop shadow-cash mutation",
+      "status": "NOT_RUN",
+      "evidence": []
+    },
+    {
+      "id": "operator-demo",
+      "title": "Full operator walkthrough and evidence export on the same pinned build",
+      "status": "PENDING",
+      "evidence": []
+    }
+  ]
+}

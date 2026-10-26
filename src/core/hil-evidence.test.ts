@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   canBeginHilWithdrawal,
+  canClearHilFaultAfterPairedReset,
   initialHilShadowState,
   invalidateHilShadow,
   parseKeyValueText,
@@ -9,6 +10,7 @@ import {
   redactSensitiveSerialText,
   reduceHilShadowObservation,
   reduceHilTransaction,
+  reduceStructuredHilTransaction,
   type HilTransaction
 } from './hil-evidence';
 
@@ -155,5 +157,64 @@ describe('HIL desktop shadow dispenser gate', () => {
     expect(planHilNotes(750, { notes500: 1, notes200: 1, notes100: 0, notes50: 1 }))
       .toEqual({ notes500: 1, notes200: 1, notes100: 0, notes50: 1 });
     expect(planHilNotes(750, { notes500: 1, notes200: 0, notes100: 0, notes50: 0 })).toBeNull();
+  });
+});
+
+
+describe('structured board-event correlation', () => {
+  it('reconciles the exact typed ID and amount without parsing raw renderer text', () => {
+    const pending = reduceStructuredHilTransaction(null, 'uno', {
+      type: 'ATM_EVENT', eventName: 'WITHDRAWAL_PENDING', id: 'T0000007', amount: 500
+    });
+    expect(pending?.phase).toBe('REQUESTED');
+
+    const permit = reduceStructuredHilTransaction(pending, 'sentinel', {
+      type: 'PERMIT', id: 'T0000007', amount: 500
+    });
+    expect(permit?.phase).toBe('PERMIT OBSERVED');
+
+    const guardianCommit = reduceStructuredHilTransaction(permit, 'sentinel', {
+      type: 'COMMIT_RECONCILIATION', id: 'T0000007', amount: 500
+    });
+    expect(guardianCommit?.phase).toBe('GUARDIAN COMMIT OBSERVED');
+
+    const reconciled = reduceStructuredHilTransaction(guardianCommit, 'uno', {
+      type: 'ATM_EVENT', eventName: 'WITHDRAWAL_APPROVED',
+      id: 'T0000007', amount: 500, balance: 49500
+    });
+    expect(reconciled?.phase).toBe('RECONCILED');
+    expect(reconciled?.balance).toBe(49500);
+  });
+
+  it('quarantines typed transaction evidence that mismatches the active amount', () => {
+    const pending = reduceStructuredHilTransaction(null, 'uno', {
+      type: 'ATM_EVENT', eventName: 'WITHDRAWAL_PENDING', id: 'T0000007', amount: 500
+    });
+    const wrongPermit = reduceStructuredHilTransaction(pending, 'sentinel', {
+      type: 'PERMIT', id: 'T0000007', amount: 1000
+    });
+    expect(wrongPermit?.phase).toBe('MISMATCH');
+    expect(wrongPermit?.unoCommitSeen).toBe(false);
+  });
+
+  it('does not change the transaction from unrelated console observations', () => {
+    expect(reduceStructuredHilTransaction(requested, 'uno', { type: 'CONSOLE_LINE' })).toBe(requested);
+  });
+});
+
+
+describe('paired-reset fault clearing', () => {
+  const baseline = { uno: 3, sentinel: 6 };
+
+  it('does not clear a HIL fault merely because both boards look ready again', () => {
+    expect(canClearHilFaultAfterPairedReset('MISMATCH', true, baseline, baseline)).toBe(false);
+    expect(canClearHilFaultAfterPairedReset('REVOKED', true, baseline, { uno: 4, sentinel: 6 })).toBe(false);
+    expect(canClearHilFaultAfterPairedReset('MISMATCH', false, baseline, { uno: 4, sentinel: 7 })).toBe(false);
+  });
+
+  it('clears only after both boards boot again and paired readiness is fresh', () => {
+    expect(canClearHilFaultAfterPairedReset('MISMATCH', true, baseline, { uno: 4, sentinel: 7 })).toBe(true);
+    expect(canClearHilFaultAfterPairedReset('DENIED', true, baseline, { uno: 4, sentinel: 7 })).toBe(false);
+    expect(canClearHilFaultAfterPairedReset('RECONCILED', true, baseline, { uno: 4, sentinel: 7 })).toBe(false);
   });
 });

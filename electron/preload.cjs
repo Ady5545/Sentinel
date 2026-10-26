@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('sentinelDesktop', {
   exportEvidence: request => ipcRenderer.invoke('data:export-file', request),
   getUserDataPath: () => ipcRenderer.invoke('data:user-data-path'),
   listSerialPorts: () => ipcRenderer.invoke('serial:list-ports'),
+  getSerialReadiness: () => ipcRenderer.invoke('serial:readiness'),
   connectBoard: request => ipcRenderer.invoke('serial:connect', request),
   disconnectBoard: device => ipcRenderer.invoke('serial:disconnect', device),
   sendBoardCommand: request => ipcRenderer.invoke('serial:command', request),

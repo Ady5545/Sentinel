@@ -95,6 +95,10 @@ ipcMain.handle('serial:list-ports', async event => {
   assertTrustedSender(event);
   return { ports: await serialManager.listPorts() };
 });
+ipcMain.handle('serial:readiness', event => {
+  assertTrustedSender(event);
+  return serialManager.getReadinessSnapshot();
+});
 ipcMain.handle('serial:connect', async (event, request) => {
   assertTrustedSender(event);
   if (!request || !['uno', 'sentinel'].includes(request.device)) return { ok: false, error: 'Unknown board role.' };
@@ -102,21 +106,22 @@ ipcMain.handle('serial:connect', async (event, request) => {
   const baudRate = Number(request.baudRate);
   if (baudRate !== 115200) return { ok: false, error: 'USB console ports must use 115200 baud; peer UART baud is configured in firmware.' };
   try {
-    await serialManager.connect(request.device, request.path, baudRate);
-    return { ok: true };
+    const connection = await serialManager.connect(request.device, request.path, baudRate);
+    return { ok: true, sessionId: connection.sessionId, phase: connection.phase };
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    return { ok: false, error: error instanceof Error ? error.message : 'Serial connection failed.' };
   }
 });
 ipcMain.handle('serial:command', async (event, request) => {
   assertTrustedSender(event);
-  if (!request || !['uno', 'sentinel'].includes(request.device) || typeof request.command !== 'string') {
-    return { ok: false, error: 'Invalid board command request.' };
+  if (!request || !['uno', 'sentinel'].includes(request.device) ||
+      !request.command || typeof request.command !== 'object' || Array.isArray(request.command)) {
+    return { ok: false, error: 'Invalid structured board command request.' };
   }
   try {
     return await serialManager.writeCommand(request.device, request.command);
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    return { ok: false, error: error instanceof Error ? error.message : 'Board command was denied.' };
   }
 });
 ipcMain.handle('serial:disconnect', async (event, device) => {
