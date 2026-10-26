@@ -114,6 +114,12 @@ test("ESP32 flushes completed STATUS bytes locally without claiming peer accepta
   assert.ok(esp.includes("peer acceptance still unconfirmed"));
 });
 
+test("guardian commit-reconciliation log includes the exact matched transaction ID and amount", () => {
+  assert.ok(esp.includes('[AUDIT] Matching controller-reported virtual transaction commit observed id='));
+  assert.ok(esp.includes('Serial.print(pendingPermitId);'));
+  assert.ok(esp.includes('Serial.println(pendingPermitAmount);'));
+});
+
 test("both boards use the same slower peer UART and bounded status retry contract", () => {
   assert.match(uno, /PEER_BAUD\s*=\s*4800/);
   assert.match(esp, /PEER_BAUD\s*=\s*4800/);

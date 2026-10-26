@@ -401,11 +401,15 @@ void handleEvent(const char *payload) {
       revoke("Transaction commit did not match one-shot guardian permit.");
       return;
     }
+    // Print the exact ID and amount the guardian matched before clearing its pending permit.
+    Serial.print(F("[AUDIT] Matching controller-reported virtual transaction commit observed id="));
+    Serial.print(pendingPermitId);
+    Serial.print(F(";amount="));
+    Serial.println(pendingPermitAmount);
     awaitingCommit = false;
     pendingPermitId[0] = '\0';
     pendingPermitAmount = 0;
     ++committedTransactions;
-    Serial.println(F("[AUDIT] Matching controller-reported virtual transaction commit observed."));
   }
 }
 
