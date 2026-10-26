@@ -20,7 +20,6 @@ static const unsigned long USB_BAUD = 115200;
 static const unsigned long DEFAULT_HEARTBEAT_TIMEOUT_MS = 1800UL;
 static const unsigned long DEFAULT_LINK_TIMEOUT_MS = 2600UL;
 static const unsigned long USB_STATUS_INTERVAL_MS = 2000UL;
-static const unsigned long PEER_STATUS_INTERVAL_MS = 1000UL;
 static const unsigned long DEFAULT_COMMIT_TIMEOUT_MS = 1800UL;
 static const unsigned long DEFAULT_PIN_FAILURE_WINDOW_MS = 60000UL;
 static const uint8_t DEFAULT_PIN_FAILURES_PER_WINDOW = 9;
@@ -44,7 +43,6 @@ uint32_t lastUnoSequence = 0;
 uint32_t lastValidUnoAt = 0;
 uint32_t lastHeartbeatAt = 0;
 uint32_t lastStatusAt = 0;
-uint32_t lastPeerStatusAt = 0;
 uint32_t budgetWindowStartedAt = 0;
 uint32_t approvedWindowAmount = 0;
 uint32_t maxTransaction = DEFAULT_MAX_TRANSACTION;
@@ -308,6 +306,9 @@ void handleHeartbeat(const char *payload) {
   }
   heartbeatSeen = true;
   lastHeartbeatAt = millis();
+  // Half-duplex turn-taking: answer only after the Uno has finished its heartbeat.
+  // Never advertise healthy status after this guardian has latched a revocation.
+  if (!revokeLatched) sendFrame("STATUS", "HEALTHY");
 }
 
 void handleEvent(const char *payload) {
@@ -437,8 +438,9 @@ void handleUnoLine(char *line) {
     mode = GUARDIAN_OBSERVING;
     budgetWindowStartedAt = millis();
     pinFailureWindowStartedAt = millis();
+    // Send one startup frame only. The Uno replies with ACK + STATE; sending a
+    // second frame here can collide with the Uno transmitting those responses.
     sendFrame("HELLO", "ESP32-SENTINEL-V2");
-    sendFrame("ACK", "HELLO_ACCEPTED");
     Serial.print(F("[LINK] Session established: "));
     Serial.println(sessionId);
     return;
@@ -621,11 +623,6 @@ void loop() {
   }
   if (awaitingCommit && (uint32_t)(now - pendingPermitStartedAt) > commitTimeoutMs) {
     revoke("Controller did not report the matching transaction commit.");
-  }
-  if (sessionEstablished && heartbeatSeen && !revokeLatched &&
-      (uint32_t)(now - lastPeerStatusAt) >= PEER_STATUS_INTERVAL_MS) {
-    sendFrame("STATUS", "HEALTHY");
-    lastPeerStatusAt = now;
   }
   if ((uint32_t)(now - lastStatusAt) >= USB_STATUS_INTERVAL_MS) {
     if (!sessionEstablished) Serial.println(F("[WAIT] Waiting for UNO-ATM-V2 HELLO; no transaction permit."));
