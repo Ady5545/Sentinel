@@ -531,10 +531,16 @@ void handleGuardianLine(char *line) {
   char fields[5][48] = {{0}};
   uint32_t seq = 0;
   if (!parseFrame(line, fields, seq)) {
+    Serial.print(F("[LINK_RX] Rejected malformed guardian frame: "));
+    Serial.println(line);
     enterGuardianLock(F("Malformed guardian frame or CRC/version validation failure."));
     return;
   }
   if (strcmp(fields[2], sessionId) != 0) {
+    Serial.print(F("[LINK_RX] Session mismatch; expected="));
+    Serial.print(sessionId);
+    Serial.print(F(" received="));
+    Serial.println(fields[2]);
     enterGuardianLock(F("Guardian session mismatch."));
     return;
   }
@@ -562,6 +568,12 @@ void handleGuardianLine(char *line) {
   }
 
   if (seq != lastGuardianSequence + 1UL) {
+    Serial.print(F("[LINK_RX] Sequence mismatch; expected="));
+    Serial.print(lastGuardianSequence + 1UL);
+    Serial.print(F(" received="));
+    Serial.print(seq);
+    Serial.print(F(" type="));
+    Serial.println(type);
     enterGuardianLock(F("Guardian sequence gap, duplicate or stale frame."));
     return;
   }
@@ -607,6 +619,8 @@ void handleGuardianLine(char *line) {
     lastGuardianStatusAt = millis();
     guardianLink = LINK_OBSERVING;
     awaitingGuardianStatus = false;
+    Serial.print(F("[STATUS_RX] Accepted HEALTHY seq="));
+    Serial.println(seq);
   } else if (STREQ(type, "PERMIT")) {
     if (!guardianFresh() || atmState != ATM_WITHDRAW_PENDING ||
         (uint32_t)(millis() - txPendingStartedAt) > transactionDecisionTimeoutMs ||
