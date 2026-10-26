@@ -17,6 +17,9 @@
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include <avr/pgmspace.h>
+#define STREQ(value, literal) (strcmp_P((value), PSTR(literal)) == 0)
+#define STRNEQ(value, literal, count) (strncmp_P((value), PSTR(literal), (count)) == 0)
 
 static const uint8_t PEER_RX_PIN = 2;
 static const uint8_t PEER_TX_PIN = 3;
@@ -109,17 +112,17 @@ char journal[JOURNAL_SIZE][32];
 uint8_t journalNext = 0;
 uint8_t journalCount = 0;
 
-const char *stateName(AtmState s) {
+const __FlashStringHelper *stateName(AtmState s) {
   switch (s) {
-    case ATM_UNCOMMISSIONED: return "UNCOMMISSIONED";
-    case ATM_IDLE: return "IDLE";
-    case ATM_PIN_PENDING: return "PIN_PENDING";
-    case ATM_AUTHENTICATED: return "AUTHENTICATED";
-    case ATM_WITHDRAW_PENDING: return "WITHDRAW_PENDING";
-    case ATM_LOCKED: return "LOCKED";
-    case ATM_GUARDIAN_LOCKED: return "GUARDIAN_LOCKED";
+    case ATM_UNCOMMISSIONED: return F("UNCOMMISSIONED");
+    case ATM_IDLE: return F("IDLE");
+    case ATM_PIN_PENDING: return F("PIN_PENDING");
+    case ATM_AUTHENTICATED: return F("AUTHENTICATED");
+    case ATM_WITHDRAW_PENDING: return F("WITHDRAW_PENDING");
+    case ATM_LOCKED: return F("LOCKED");
+    case ATM_GUARDIAN_LOCKED: return F("GUARDIAN_LOCKED");
   }
-  return "UNKNOWN";
+  return F("UNKNOWN");
 }
 
 void secureClear(char *buffer, size_t length) {
@@ -127,18 +130,27 @@ void secureClear(char *buffer, size_t length) {
   while (length--) *p++ = '\0';
 }
 
-void journalEvent(const char *eventName) {
-  strncpy(journal[journalNext], eventName, sizeof(journal[journalNext]) - 1);
+void journalEvent(const __FlashStringHelper *eventName) {
+  strncpy_P(journal[journalNext], (PGM_P)eventName, sizeof(journal[journalNext]) - 1);
   journal[journalNext][sizeof(journal[journalNext]) - 1] = '\0';
   journalNext = (uint8_t)((journalNext + 1) % JOURNAL_SIZE);
   if (journalCount < JOURNAL_SIZE) ++journalCount;
 }
 
-void emitEvent(const char *name, const char *details) {
+void emitEvent(const __FlashStringHelper *name, const char *details) {
   Serial.print(F("ATM_EVENT|"));
   Serial.print(name);
   Serial.print('|');
-  Serial.println((details && details[0]) ? details : "-");
+  if (details && details[0]) Serial.println(details);
+  else Serial.println('-');
+  journalEvent(name);
+}
+
+void emitEvent(const __FlashStringHelper *name, const __FlashStringHelper *details) {
+  Serial.print(F("ATM_EVENT|"));
+  Serial.print(name);
+  Serial.print('|');
+  Serial.println(details);
   journalEvent(name);
 }
 
@@ -162,13 +174,13 @@ bool validSession(const char *s) {
 
 void makeSession() {
   // Session separation only; this is not cryptographic randomness.
-  snprintf(sessionId, sizeof(sessionId), "U%08lX", (unsigned long)micros());
+  snprintf_P(sessionId, sizeof(sessionId), PSTR("U%08lX"), (unsigned long)micros());
 }
 
-bool sendFrame(const char *type, const char *payload) {
+bool sendFrame(const __FlashStringHelper *type, const char *payload) {
   char prefix[FRAME_MAX];
   const uint32_t seq = ++txSequence;
-  const int n = snprintf(prefix, sizeof(prefix), "S2|%s|%s|%lu|%s", type,
+  const int n = snprintf_P(prefix, sizeof(prefix), PSTR("S2|%S|%s|%lu|%s"), type,
                          sessionId, (unsigned long)seq,
                          (payload && payload[0]) ? payload : "-");
   if (n <= 0 || (size_t)n >= sizeof(prefix)) {
@@ -182,9 +194,30 @@ bool sendFrame(const char *type, const char *payload) {
   GuardianSerial.print(prefix);
   GuardianSerial.print('|');
   char crcText[5];
-  snprintf(crcText, sizeof(crcText), "%04X", crc);
+  snprintf_P(crcText, sizeof(crcText), PSTR("%04X"), crc);
   GuardianSerial.print(crcText);
   GuardianSerial.print('\n');
+  return true;
+}
+
+bool sendFrame(const __FlashStringHelper *type, const __FlashStringHelper *payload) {
+  char prefix[FRAME_MAX];
+  const uint32_t seq = ++txSequence;
+  const int n = snprintf_P(prefix, sizeof(prefix), PSTR("S2|%S|%s|%lu|%S"), type,
+                           sessionId, (unsigned long)seq, payload);
+  if (n <= 0 || (size_t)n >= sizeof(prefix)) {
+    guardianRevokeLatched = true;
+    guardianLink = LINK_REVOKED;
+    atmState = ATM_GUARDIAN_LOCKED;
+    return false;
+  }
+  const uint16_t crc = crc16CcittFalse((const uint8_t *)prefix, (size_t)n);
+  GuardianSerial.print(prefix);
+  GuardianSerial.print('|');
+  char crcText[5];
+  snprintf_P(crcText, sizeof(crcText), PSTR("%04X"), crc);
+  GuardianSerial.print(crcText);
+  GuardianSerial.print('\\n');
   return true;
 }
 
@@ -208,7 +241,7 @@ bool parseFrame(char *line, char fields[5][48], uint32_t &seqOut) {
     part = strtok_r(NULL, "|", &save);
   }
   if (part || count != 5) return false;
-  if (strcmp(fields[0], "S2") != 0 || !validSession(fields[2])) return false;
+  if (!STREQ(fields[0], "S2") || !validSession(fields[2])) return false;
   if (!fields[3][0]) return false;
   for (size_t i = 0; fields[3][i]; ++i)
     if (fields[3][i] < '0' || fields[3][i] > '9') return false;
@@ -288,11 +321,11 @@ bool guardianFresh() {
 void sendState() {
   if (!handshakeComplete) return;
   char payload[48];
-  snprintf(payload, sizeof(payload), "atm=%s;auth=%u;tx=%lu",
+  snprintf_P(payload, sizeof(payload), PSTR("atm=%S;auth=%u;tx=%lu"),
            stateName(atmState),
            (atmState == ATM_AUTHENTICATED || atmState == ATM_WITHDRAW_PENDING) ? 1 : 0,
            (unsigned long)txCommittedCount);
-  sendFrame("STATE", payload);
+  sendFrame(F("STATE"), payload);
   statePublished = true;
 }
 
@@ -325,16 +358,16 @@ void enterGuardianLock(const char *reason) {
   if (first) {
     Serial.print(F("[SECURITY_LOCK] "));
     Serial.println(reason);
-    emitEvent("GUARDIAN_REVOKED", "dispense=DENIED");
+    emitEvent(F("GUARDIAN_REVOKED"), F("dispense=DENIED"));
   }
 }
 
 void sendHeartbeat(uint32_t now) {
   if (!handshakeComplete) return;
   char payload[48];
-  snprintf(payload, sizeof(payload), "state=%s;up=%lu",
+  snprintf_P(payload, sizeof(payload), PSTR("state=%S;up=%lu"),
            stateName(atmState), (unsigned long)now);
-  sendFrame("HEARTBEAT", payload);
+  sendFrame(F("HEARTBEAT"), payload);
   lastHeartbeatAt = now;
 }
 
@@ -422,10 +455,10 @@ void completeWithdrawal() {
   lastCustomerActivityAt = millis();
 
   char details[48];
-  snprintf(details, sizeof(details), "id=%s;amount=%lu;balance=%lu",
+  snprintf_P(details, sizeof(details), PSTR("id=%s;amount=%lu;balance=%lu"),
            txPendingId, (unsigned long)txPendingAmount, (unsigned long)account.balance);
-  emitEvent("WITHDRAWAL_APPROVED", details);
-  sendFrame("EVENT", details);
+  emitEvent(F("WITHDRAWAL_APPROVED"), details);
+  sendFrame(F("EVENT"), details);
   Serial.print(F("[VIRTUAL_ONLY] Withdrawal committed: "));
   Serial.print(txPendingAmount);
   Serial.print(F("; balance="));
@@ -457,42 +490,42 @@ void handleGuardianLine(char *line) {
   const char *type = fields[1];
   const char *payload = fields[4];
 
-  if (strcmp(type, "HELLO") == 0) {
-    if (strncmp(payload, "ESP32-SENTINEL-V2", 17) != 0) {
+  if (STREQ(type, "HELLO")) {
+    if (!STRNEQ(payload, "ESP32-SENTINEL-V2", 17)) {
       enterGuardianLock("Unexpected guardian protocol identity.");
       return;
     }
     handshakeComplete = true;
     if (!guardianRevokeLatched) guardianLink = LINK_OBSERVING;
     Serial.println(F("[LINK] V2 guardian handshake observed (identity is self-reported)."));
-    sendFrame("ACK", "HELLO_ACCEPTED");
+    sendFrame(F("ACK"), F("HELLO_ACCEPTED"));
     if (!statePublished) sendState();
-  } else if (strcmp(type, "ACK") == 0) {
-    if (!handshakeComplete || strcmp(payload, "HELLO_ACCEPTED") != 0) {
+  } else if (STREQ(type, "ACK")) {
+    if (!handshakeComplete || !STREQ(payload, "HELLO_ACCEPTED")) {
       enterGuardianLock("Unexpected guardian ACK.");
       return;
     }
-  } else if (strcmp(type, "STATUS") == 0) {
+  } else if (STREQ(type, "STATUS")) {
     if (guardianRevokeLatched) return;
     guardianLink = LINK_OBSERVING;
-  } else if (strcmp(type, "PERMIT") == 0) {
+  } else if (STREQ(type, "PERMIT")) {
     if (!guardianFresh() || atmState != ATM_WITHDRAW_PENDING || !transactionIdMatches(payload)) {
       enterGuardianLock("Permit missing freshness or did not match the pending transaction.");
       return;
     }
     completeWithdrawal();
-  } else if (strcmp(type, "DENY") == 0) {
+  } else if (STREQ(type, "DENY")) {
     if (atmState != ATM_WITHDRAW_PENDING || !transactionIdMatches(payload)) {
       enterGuardianLock("Denial did not match the pending transaction.");
       return;
     }
     ++txDeniedCount;
-    emitEvent("WITHDRAWAL_DENIED", payload);
+    emitEvent(F("WITHDRAWAL_DENIED"), payload);
     txPendingAmount = 0;
     txPendingId[0] = '\0';
     memset(txPendingPlan, 0, sizeof(txPendingPlan));
     setAtmState(ATM_AUTHENTICATED);
-  } else if (strcmp(type, "REVOKE") == 0) {
+  } else if (STREQ(type, "REVOKE")) {
     enterGuardianLock("Guardian revoked controller authority.");
   } else {
     enterGuardianLock("Unknown guardian message type.");
@@ -548,25 +581,25 @@ void printHelp() {
 void handleAddAccount(char *card, char *pin, char *balanceText) {
   if (guardianRevokeLatched || atmState == ATM_PIN_PENDING ||
       atmState == ATM_AUTHENTICATED || atmState == ATM_WITHDRAW_PENDING) {
-    emitEvent("CONFIG_DENIED", "reason=customer_session_or_guardian_lock");
+    emitEvent(F("CONFIG_DENIED"), F("reason=customer_session_or_guardian_lock"));
     return;
   }
   if (!validCardId(card) || !validPin(pin)) {
-    emitEvent("CONFIG_DENIED", "reason=invalid_card_or_pin_format");
+    emitEvent(F("CONFIG_DENIED"), F("reason=invalid_card_or_pin_format"));
     return;
   }
   uint32_t balance = 0;
   if (!parseUnsigned(balanceText, 1000000UL, balance)) {
-    emitEvent("CONFIG_DENIED", "reason=invalid_balance");
+    emitEvent(F("CONFIG_DENIED"), F("reason=invalid_balance"));
     return;
   }
   if (findAccount(card) >= 0) {
-    emitEvent("CONFIG_DENIED", "reason=duplicate_card");
+    emitEvent(F("CONFIG_DENIED"), F("reason=duplicate_card"));
     return;
   }
   const int8_t slot = freeAccountSlot();
   if (slot < 0) {
-    emitEvent("CONFIG_DENIED", "reason=max_accounts_reached");
+    emitEvent(F("CONFIG_DENIED"), F("reason=max_accounts_reached"));
     return;
   }
   Account &a = accounts[(uint8_t)slot];
@@ -577,8 +610,8 @@ void handleAddAccount(char *card, char *pin, char *balanceText) {
   a.used = true;
   if (atmState == ATM_UNCOMMISSIONED) setAtmState(ATM_IDLE);
   char details[40];
-  snprintf(details, sizeof(details), "card=%s;balance=%lu", a.cardId, (unsigned long)a.balance);
-  emitEvent("ACCOUNT_PROVISIONED", details);
+  snprintf_P(details, sizeof(details), PSTR("card=%s;balance=%lu"), a.cardId, (unsigned long)a.balance);
+  emitEvent(F("ACCOUNT_PROVISIONED"), details);
 }
 
 void handleSetCash(char *c500, char *c200, char *c100, char *c50) {
@@ -586,14 +619,14 @@ void handleSetCash(char *c500, char *c200, char *c100, char *c50) {
   if (activeAccount >= 0 || atmState == ATM_WITHDRAW_PENDING ||
       !parseUnsigned(c500, 9999, v500) || !parseUnsigned(c200, 9999, v200) ||
       !parseUnsigned(c100, 9999, v100) || !parseUnsigned(c50, 9999, v50)) {
-    emitEvent("CONFIG_DENIED", "reason=invalid_cash_or_active_session");
+    emitEvent(F("CONFIG_DENIED"), F("reason=invalid_cash_or_active_session"));
     return;
   }
   cashInventory.notes500 = (uint16_t)v500;
   cashInventory.notes200 = (uint16_t)v200;
   cashInventory.notes100 = (uint16_t)v100;
   cashInventory.notes50 = (uint16_t)v50;
-  emitEvent("CASH_CONFIGURED", "currency=INR;values=500,200,100,50");
+  emitEvent(F("CASH_CONFIGURED"), F("currency=INR;values=500,200,100,50"));
 }
 
 void handleSetPolicy(char *maxText, char *windowText) {
@@ -602,38 +635,38 @@ void handleSetPolicy(char *maxText, char *windowText) {
       !parseUnsigned(maxText, 1000000UL, newMax) ||
       !parseUnsigned(windowText, 1000000UL, newWindow) ||
       newMax == 0 || newWindow < newMax) {
-    emitEvent("CONFIG_DENIED", "reason=invalid_policy_or_active_session");
+    emitEvent(F("CONFIG_DENIED"), F("reason=invalid_policy_or_active_session"));
     return;
   }
   maxWithdrawal = newMax;
   windowLimit = newWindow;
   windowWithdrawn = 0;
   budgetWindowStartedAt = millis();
-  emitEvent("POLICY_CONFIGURED", "window=uptime_based_demo_window");
+  emitEvent(F("POLICY_CONFIGURED"), F("window=uptime_based_demo_window"));
 }
 
 void handleCard(const char *card) {
   if (guardianRevokeLatched || !guardianFresh()) {
-    emitEvent("CARD_REJECTED", "reason=guardian_unavailable");
+    emitEvent(F("CARD_REJECTED"), F("reason=guardian_unavailable"));
     return;
   }
   if (atmState != ATM_IDLE) {
-    emitEvent("CARD_REJECTED", "reason=atm_not_idle");
+    emitEvent(F("CARD_REJECTED"), F("reason=atm_not_idle"));
     return;
   }
   if (!validCardId(card)) {
-    emitEvent("CARD_REJECTED", "reason=invalid_card_format");
+    emitEvent(F("CARD_REJECTED"), F("reason=invalid_card_format"));
     return;
   }
   const int8_t idx = findAccount(card);
   if (idx < 0) {
-    emitEvent("CARD_REJECTED", "reason=unknown_demo_card");
-    sendFrame("EVENT", "source=BOARD_REPORTED;event=UNKNOWN_CARD");
+    emitEvent(F("CARD_REJECTED"), F("reason=unknown_demo_card"));
+    sendFrame(F("EVENT"), F("source=BOARD_REPORTED;event=UNKNOWN_CARD"));
     return;
   }
   Account &a = accounts[(uint8_t)idx];
   if (a.lockoutUntil && (int32_t)(millis() - a.lockoutUntil) < 0) {
-    emitEvent("CARD_REJECTED", "reason=card_temporarily_locked");
+    emitEvent(F("CARD_REJECTED"), F("reason=card_temporarily_locked"));
     return;
   }
   if (a.lockoutUntil && (int32_t)(millis() - a.lockoutUntil) >= 0) {
@@ -646,17 +679,17 @@ void handleCard(const char *card) {
   pinEntryStartedAt = millis();
   lastCustomerActivityAt = millis();
   setAtmState(ATM_PIN_PENDING);
-  emitEvent("PIN_REQUIRED", "tries=3;timeout_ms=30000");
-  sendFrame("EVENT", "source=BOARD_REPORTED;event=CARD_ACCEPTED");
+  emitEvent(F("PIN_REQUIRED"), F("tries=3;timeout_ms=30000"));
+  sendFrame(F("EVENT"), F("source=BOARD_REPORTED;event=CARD_ACCEPTED"));
 }
 
 void handlePin(char *pin) {
   if (atmState != ATM_PIN_PENDING || activeAccount < 0) {
-    emitEvent("PIN_REJECTED", "reason=no_card_waiting");
+    emitEvent(F("PIN_REJECTED"), F("reason=no_card_waiting"));
     return;
   }
   if ((uint32_t)(millis() - pinEntryStartedAt) > PIN_ENTRY_TIMEOUT_MS) {
-    emitEvent("PIN_REJECTED", "reason=entry_timeout");
+    emitEvent(F("PIN_REJECTED"), F("reason=entry_timeout"));
     resetCustomerSession();
     return;
   }
@@ -664,14 +697,14 @@ void handlePin(char *pin) {
   if (!validPin(pin) || !pinEqualsConstantWork(pin, a.pin)) {
     ++a.failedPins;
     char details[32];
-    snprintf(details, sizeof(details), "remaining=%u", (unsigned)(MAX_PIN_FAILURES - (a.failedPins < MAX_PIN_FAILURES ? a.failedPins : MAX_PIN_FAILURES)));
-    emitEvent("PIN_FAILED", details);
+    snprintf_P(details, sizeof(details), PSTR("remaining=%u"), (unsigned)(MAX_PIN_FAILURES - (a.failedPins < MAX_PIN_FAILURES ? a.failedPins : MAX_PIN_FAILURES)));
+    emitEvent(F("PIN_FAILED"), details);
     char eventPayload[48];
-    snprintf(eventPayload, sizeof(eventPayload), "source=BOARD_REPORTED;event=PIN_FAIL;count=%u", (unsigned)a.failedPins);
-    sendFrame("EVENT", eventPayload);
+    snprintf_P(eventPayload, sizeof(eventPayload), PSTR("source=BOARD_REPORTED;event=PIN_FAIL;count=%u"), (unsigned)a.failedPins);
+    sendFrame(F("EVENT"), eventPayload);
     if (a.failedPins >= MAX_PIN_FAILURES) {
       a.lockoutUntil = millis() + PIN_LOCKOUT_MS;
-      emitEvent("CARD_LOCKED", "duration_ms=60000");
+      emitEvent(F("CARD_LOCKED"), F("duration_ms=60000"));
       resetCustomerSession();
       setAtmState(ATM_LOCKED);
     }
@@ -681,26 +714,26 @@ void handlePin(char *pin) {
   customerSessionStartedAt = millis();
   lastCustomerActivityAt = millis();
   char details[32];
-  snprintf(details, sizeof(details), "card=%s", a.cardId);
-  emitEvent("AUTHENTICATED", details);
-  sendFrame("EVENT", "source=BOARD_REPORTED;event=PIN_OK");
+  snprintf_P(details, sizeof(details), PSTR("card=%s"), a.cardId);
+  emitEvent(F("AUTHENTICATED"), details);
+  sendFrame(F("EVENT"), F("source=BOARD_REPORTED;event=PIN_OK"));
   setAtmState(ATM_AUTHENTICATED);
 }
 
 void handleBalance() {
   if (atmState != ATM_AUTHENTICATED || activeAccount < 0 || !guardianFresh()) {
-    emitEvent("BALANCE_DENIED", "reason=not_authenticated_or_guardian");
+    emitEvent(F("BALANCE_DENIED"), F("reason=not_authenticated_or_guardian"));
     return;
   }
   lastCustomerActivityAt = millis();
   char details[32];
-  snprintf(details, sizeof(details), "amount=%lu", (unsigned long)accounts[(uint8_t)activeAccount].balance);
-  emitEvent("BALANCE", details);
+  snprintf_P(details, sizeof(details), PSTR("amount=%lu"), (unsigned long)accounts[(uint8_t)activeAccount].balance);
+  emitEvent(F("BALANCE"), details);
 }
 
 void handleWithdraw(const char *amountText) {
   if (atmState != ATM_AUTHENTICATED || activeAccount < 0) {
-    emitEvent("WITHDRAWAL_DENIED", "reason=not_authenticated");
+    emitEvent(F("WITHDRAWAL_DENIED"), F("reason=not_authenticated"));
     return;
   }
   if (!guardianFresh()) {
@@ -710,18 +743,18 @@ void handleWithdraw(const char *amountText) {
   uint32_t amount = 0;
   if (!parseUnsigned(amountText, 1000000UL, amount) || amount == 0 || amount % 50UL != 0) {
     ++txDeniedCount;
-    emitEvent("WITHDRAWAL_DENIED", "reason=invalid_amount_or_denomination");
+    emitEvent(F("WITHDRAWAL_DENIED"), F("reason=invalid_amount_or_denomination"));
     return;
   }
   Account &a = accounts[(uint8_t)activeAccount];
   if (amount > maxWithdrawal) {
     ++txDeniedCount;
-    emitEvent("WITHDRAWAL_DENIED", "reason=per_transaction_limit");
+    emitEvent(F("WITHDRAWAL_DENIED"), F("reason=per_transaction_limit"));
     return;
   }
   if (amount > a.balance) {
     ++txDeniedCount;
-    emitEvent("WITHDRAWAL_DENIED", "reason=insufficient_balance");
+    emitEvent(F("WITHDRAWAL_DENIED"), F("reason=insufficient_balance"));
     return;
   }
   if ((uint32_t)(millis() - budgetWindowStartedAt) >= BUDGET_WINDOW_MS) {
@@ -730,29 +763,29 @@ void handleWithdraw(const char *amountText) {
   }
   if (windowWithdrawn > windowLimit || amount > windowLimit - windowWithdrawn) {
     ++txDeniedCount;
-    emitEvent("WITHDRAWAL_DENIED", "reason=uptime_window_limit");
+    emitEvent(F("WITHDRAWAL_DENIED"), F("reason=uptime_window_limit"));
     return;
   }
   uint16_t plan[4] = {0, 0, 0, 0};
   if (!makeNotePlan(amount, plan)) {
     ++txDeniedCount;
-    emitEvent("WITHDRAWAL_DENIED", "reason=virtual_cash_unavailable");
+    emitEvent(F("WITHDRAWAL_DENIED"), F("reason=virtual_cash_unavailable"));
     return;
   }
 
   txPendingAmount = amount;
   memcpy(txPendingPlan, plan, sizeof(plan));
-  snprintf(txPendingId, sizeof(txPendingId), "T%07lu", (unsigned long)(++txCounter));
+  snprintf_P(txPendingId, sizeof(txPendingId), PSTR("T%07lu"), (unsigned long)(++txCounter));
   txPendingStartedAt = millis();
   lastCustomerActivityAt = millis();
   setAtmState(ATM_WITHDRAW_PENDING);
 
   char payload[48];
-  snprintf(payload, sizeof(payload), "id=%s;amount=%lu", txPendingId, (unsigned long)amount);
-  sendFrame("REQUEST", payload);
+  snprintf_P(payload, sizeof(payload), PSTR("id=%s;amount=%lu"), txPendingId, (unsigned long)amount);
+  sendFrame(F("REQUEST"), payload);
   char details[40];
-  snprintf(details, sizeof(details), "id=%s;amount=%lu", txPendingId, (unsigned long)amount);
-  emitEvent("WITHDRAWAL_PENDING", details);
+  snprintf_P(details, sizeof(details), PSTR("id=%s;amount=%lu"), txPendingId, (unsigned long)amount);
+  emitEvent(F("WITHDRAWAL_PENDING"), details);
 }
 
 void handleCommand(char *line) {
@@ -770,56 +803,56 @@ void handleCommand(char *line) {
     token = strtok_r(NULL, " \t", &save);
   }
   if (token) {
-    emitEvent("COMMAND_REJECTED", "reason=too_many_fields");
+    emitEvent(F("COMMAND_REJECTED"), F("reason=too_many_fields"));
     secureClear(work, sizeof(work));
     return;
   }
   if (argc == 0) { secureClear(work, sizeof(work)); return; }
 
-  if (strcmp(argv[0], "HELP") == 0) {
+  if (STREQ(argv[0], "HELP")) {
     printHelp();
-  } else if (strcmp(argv[0], "STATUS") == 0) {
+  } else if (STREQ(argv[0], "STATUS")) {
     printStatus();
-  } else if (strcmp(argv[0], "JOURNAL") == 0) {
+  } else if (STREQ(argv[0], "JOURNAL")) {
     Serial.println(F("ATM_JOURNAL_BEGIN"));
     for (uint8_t i = 0; i < journalCount; ++i) {
       const uint8_t idx = (uint8_t)((journalNext + JOURNAL_SIZE - journalCount + i) % JOURNAL_SIZE);
       Serial.println(journal[idx]);
     }
     Serial.println(F("ATM_JOURNAL_END"));
-  } else if (strcmp(argv[0], "ADD_ACCOUNT") == 0 && argc == 4) {
+  } else if (STREQ(argv[0], "ADD_ACCOUNT") && argc == 4) {
     handleAddAccount(argv[1], argv[2], argv[3]);
-  } else if (strcmp(argv[0], "SET_CASH") == 0 && argc == 5) {
+  } else if (STREQ(argv[0], "SET_CASH") && argc == 5) {
     handleSetCash(argv[1], argv[2], argv[3], argv[4]);
-  } else if (strcmp(argv[0], "SET_POLICY") == 0 && argc == 3) {
+  } else if (STREQ(argv[0], "SET_POLICY") && argc == 3) {
     handleSetPolicy(argv[1], argv[2]);
-  } else if (strcmp(argv[0], "CARD") == 0 && argc == 2) {
+  } else if (STREQ(argv[0], "CARD") && argc == 2) {
     handleCard(argv[1]);
-  } else if (strcmp(argv[0], "PIN") == 0 && argc == 2) {
+  } else if (STREQ(argv[0], "PIN") && argc == 2) {
     handlePin(argv[1]);
-  } else if (strcmp(argv[0], "BALANCE") == 0 && argc == 1) {
+  } else if (STREQ(argv[0], "BALANCE") && argc == 1) {
     handleBalance();
-  } else if (strcmp(argv[0], "WITHDRAW") == 0 && argc == 2) {
+  } else if (STREQ(argv[0], "WITHDRAW") && argc == 2) {
     handleWithdraw(argv[1]);
-  } else if (strcmp(argv[0], "CANCEL") == 0 && argc == 1) {
+  } else if (STREQ(argv[0], "CANCEL") && argc == 1) {
     if (atmState == ATM_PIN_PENDING || atmState == ATM_AUTHENTICATED) {
-      emitEvent("SESSION_CANCELLED", "reason=customer_cancel");
+      emitEvent(F("SESSION_CANCELLED"), F("reason=customer_cancel"));
       resetCustomerSession();
     } else {
-      emitEvent("CANCEL_IGNORED", "reason=no_customer_session");
+      emitEvent(F("CANCEL_IGNORED"), F("reason=no_customer_session"));
     }
-  } else if (strcmp(argv[0], "LOGOUT") == 0 && argc == 1) {
+  } else if (STREQ(argv[0], "LOGOUT") && argc == 1) {
     if (atmState == ATM_AUTHENTICATED) {
-      emitEvent("LOGOUT", "reason=customer_requested");
+      emitEvent(F("LOGOUT"), F("reason=customer_requested"));
       resetCustomerSession();
     } else {
-      emitEvent("LOGOUT_IGNORED", "reason=no_authenticated_session");
+      emitEvent(F("LOGOUT_IGNORED"), F("reason=no_authenticated_session"));
     }
-  } else if (strcmp(argv[0], "FIXTURE_MISMATCH") == 0 && argc == 1) {
-    sendFrame("EVENT", "source=SIMULATED;event=PROFILE_MISMATCH");
-    emitEvent("FIXTURE_SENT", "source=SIMULATED");
+  } else if (STREQ(argv[0], "FIXTURE_MISMATCH") && argc == 1) {
+    sendFrame(F("EVENT"), F("source=SIMULATED;event=PROFILE_MISMATCH"));
+    emitEvent(F("FIXTURE_SENT"), F("source=SIMULATED"));
   } else {
-    emitEvent("COMMAND_REJECTED", "reason=unknown_command_or_arguments");
+    emitEvent(F("COMMAND_REJECTED"), F("reason=unknown_command_or_arguments"));
     Serial.println(F("Send HELP for command syntax."));
   }
   secureClear(work, sizeof(work));
@@ -833,7 +866,7 @@ void pollUsb() {
         usbBuffer[usbLength] = '\0';
         handleCommand(usbBuffer);
       } else if (droppingUsbLine) {
-        emitEvent("COMMAND_REJECTED", "reason=overlong_line");
+        emitEvent(F("COMMAND_REJECTED"), F("reason=overlong_line"));
       }
       secureClear(usbBuffer, sizeof(usbBuffer));
       usbLength = 0;
@@ -861,7 +894,7 @@ void setup() {
   Serial.print(F("SESSION: "));
   Serial.println(sessionId);
   printHelp();
-  sendFrame("HELLO", "UNO-ATM-V2");
+  sendFrame(F("HELLO"), F("UNO-ATM-V2"));
   lastHelloAt = millis();
 }
 
@@ -871,7 +904,7 @@ void loop() {
   pollUsb();
 
   if (!handshakeComplete && now - lastHelloAt >= HELLO_RETRY_MS) {
-    sendFrame("HELLO", "UNO-ATM-V2");
+    sendFrame(F("HELLO"), F("UNO-ATM-V2"));
     lastHelloAt = now;
   }
 
@@ -886,18 +919,18 @@ void loop() {
 
   if (atmState == ATM_PIN_PENDING &&
       (uint32_t)(now - pinEntryStartedAt) > PIN_ENTRY_TIMEOUT_MS) {
-    emitEvent("PIN_TIMEOUT", "reason=entry_timeout");
+    emitEvent(F("PIN_TIMEOUT"), F("reason=entry_timeout"));
     resetCustomerSession();
   }
   if (atmState == ATM_AUTHENTICATED &&
       (uint32_t)(now - lastCustomerActivityAt) > SESSION_TIMEOUT_MS) {
-    emitEvent("SESSION_TIMEOUT", "reason=idle_timeout");
+    emitEvent(F("SESSION_TIMEOUT"), F("reason=idle_timeout"));
     resetCustomerSession();
   }
   if (atmState == ATM_WITHDRAW_PENDING &&
       (uint32_t)(now - txPendingStartedAt) > 1800UL) {
     ++txDeniedCount;
-    emitEvent("WITHDRAWAL_DENIED", "reason=guardian_decision_timeout");
+    emitEvent(F("WITHDRAWAL_DENIED"), F("reason=guardian_decision_timeout"));
     enterGuardianLock("No matching per-transaction guardian decision arrived.");
   }
   if (atmState == ATM_LOCKED) {
@@ -912,7 +945,7 @@ void loop() {
         accounts[i].lockoutUntil = 0;
       }
       setAtmState(hasConfiguredAccount() ? ATM_IDLE : ATM_UNCOMMISSIONED);
-      emitEvent("LOCKOUT_EXPIRED", "reason=timed_lockout_completed");
+      emitEvent(F("LOCKOUT_EXPIRED"), F("reason=timed_lockout_completed"));
     }
   }
 }
