@@ -350,7 +350,7 @@ export default function App() {
       <p className="rail-label">INTEGRATION</p>
       <nav className="rail-nav"><NavButton active={view === 'hardware'} icon={<Plug />} label="Hardware bench" onClick={() => setView('hardware')} /></nav>
       <div className="rail-bottom">
-        <div className="rail-state"><i /> OFFLINE SIMULATION</div>
+        <div className="rail-state"><i /> {research.mode === 'HIL' ? 'HARDWARE-IN-THE-LOOP' : 'OFFLINE SIMULATION'}</div>
         <p>No bank connection<br />No physical cash</p>
         <div className="rail-version">{runtime ? runtime.platform.toUpperCase() + ' · APP ' + runtime.version : 'DESKTOP RESEARCH BUILD'}</div>
       </div>
@@ -360,6 +360,8 @@ export default function App() {
         <div className="breadcrumbs"><span>SENTINEL</span><ChevronRight size={13} /><strong>{viewTitle(view)}</strong></div>
         <div className="titlebar-status">
           <span className="status-chip"><i /> LOCAL DOMAIN CORE</span>
+          <span className="status-chip">{research.mode} · {research.runId}</span>
+          <button className="quiet-button" onClick={() => void switchResearchMode()}>{research.mode === 'HIL' ? 'Return to simulation' : 'Enter HIL mode'}</button>
           <span className={'status-chip ' + (state.sentinelStatus === 'AUTHORITY REVOKED' ? 'critical-chip' : 'safe-chip')}><ShieldCheck size={13} /> {state.sentinelStatus}</span>
         </div>
       </header>
@@ -369,7 +371,7 @@ export default function App() {
         {view === 'sentinel' && <SentinelView state={state} boards={boards} />}
         {view === 'experiments' && <ExperimentView state={state} dispatch={dispatch} />}
         {view === 'journal' && <JournalView events={combinedJournalEvents} alerts={alerts} onExport={exportEvidence} />}
-        {view === 'hardware' && <HardwareView ports={ports} chosenPort={chosenPort} setChosenPort={setChosenPort} boards={boards} message={portMessage} serialEvents={serialEvents} refresh={refreshPorts} connect={connectBoard} disconnect={disconnectBoard} sendCommand={sendBoardCommand} hilTransaction={hilTransaction} boardBootEpochs={boardBootEpochs} hilFaultResetBaseline={hilFaultResetBaseline} nowMs={nowMs} clearHilTransaction={() => { setHilTransaction(null); setHilTransactionStartedAt(null); setHilFaultResetBaseline(null); }} />}
+        {view === 'hardware' && <HardwareView ports={ports} chosenPort={chosenPort} setChosenPort={setChosenPort} boards={boards} message={portMessage} serialEvents={serialEvents} refresh={refreshPorts} connect={connectBoard} disconnect={disconnectBoard} sendCommand={sendBoardCommand} researchMode={research.mode} researchRunId={research.runId} hilShadow={research.hilShadow} hilFaultLatched={research.hilFaultLatched} canRecommissionFault={canRecommissionHilShadow(research, nowMs)} researchRecords={research.records} hilTransaction={hilTransaction} nowMs={nowMs} clearHilTransaction={clearHilRecord} />}
         <footer className="status-footer"><span><i /> DOMAIN CORE ACTIVE</span><span>{eventCount.toString().padStart(3,'0')} EVENTS · {alerts.toString().padStart(2,'0')} ALERTS</span><span>FICTIONAL ACCOUNT · VIRTUAL CASH · RESEARCH PROTOTYPE</span></footer>
       </div>
     </main>
