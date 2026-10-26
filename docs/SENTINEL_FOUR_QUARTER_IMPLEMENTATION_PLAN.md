@@ -2,7 +2,7 @@
 
 **Created:** 26 October 2026  
 **Repository:** `Ady5545/Sentinel`  
-**Working branch:** `feat/implementation-quarter-2-2026-10-26`  
+**Working branch:** `feat/implementation-quarter-3-2026-10-27`  
 **Rule:** Deliver the remaining work in four approximately equal 25% quarters. Existing implemented work is preserved; only audited gaps are changed. By explicit user direction, Quarter 2 began while Quarter 1's separate audit remains open; this does not mark Quarter 1 complete. Quarter 3 must not begin until Quarter 2's exit gate is verified.
 
 ## Quarter 1 — Authority and protocol reliability (0–25%)
@@ -39,13 +39,15 @@
 
 ## Quarter 3 — End-to-end HIL and research evidence (50–75%)
 
-- Route operator/customer setup and withdrawal actions through the typed Uno adapter only in HIL mode.
-- Correlate request, decision, Uno commit, ESP32 commit acknowledgement and desktop shadow update by exact session/transaction ID/amount.
-- Make the desktop virtual-cash gate idempotent; unresolved or mismatched evidence freezes further HIL withdrawals.
-- Connect the terminal, Sentinel console, experiment lab, journal and hardware bridge to one explicit mode/session coordinator.
-- Add repeatable, versioned synthetic scenarios, provenance labels, immutable run records, safe PIN redaction, JSON/CSV export and software-only replay.
+- [x] Route operator/customer setup and withdrawal actions through typed Uno commands only in active HIL mode; the generic free-text console blocks setup/customer/withdrawal commands and the typed adapter rechecks active mode plus fresh paired readiness.
+- [x] Add a session coordinator that correlates request, permit, Uno commit, guardian ACK/reconciliation and the shadow-commit count by exact board session, transaction ID and amount.
+- [x] Make coordinator commit correlation exactly-once; duplicate commit/ACK evidence is idempotent, reused transaction IDs and mismatched evidence freeze the run. Integrate the existing desktop virtual-cash shadow so it mutates only after full correlated reconciliation and quarantines on transport/reset/fault.
+- [x] Connect app-level terminal events, Sentinel evidence, experiment lab, journal/export, and hardware observations to one append-only versioned research run record.
+- [x] Add versioned synthetic scenarios for a clean withdrawal, amount mismatch and denial; replay is isolated from the serial bridge and marks board-like events SYNTHETIC_FIXTURE.
+- [x] Add immutable event records, safe PIN redaction, versioned JSON run records and CSV evidence export with provenance labels.
+- [ ] Complete source-to-UI audit for all HIL customer/setup commands and ensure all active/frozen states are visible consistently across modules.
 
-**Quarter 3 exit gate:** A supported HIL transaction either reconciles end-to-end exactly once or visibly ends denied/fault/reconciliation-required with no desktop virtual cash mutation.
+**Quarter 3 exit gate:** A supported HIL transaction either reconciles end-to-end exactly once or visibly ends denied/fault/reconciliation-required with no desktop virtual cash mutation. The first implementation slice passed automated CI on code revision `4be8ac42b615f52d32cba9a177f22c59f299cf50` in [run 40381930063](https://github.com/Ady5545/Sentinel/actions/runs/40381930063), and the current plan-updated head `0478770c25b2e6c044907587e18a75cb9ac0896b` passed [run 40382117517](https://github.com/Ady5545/Sentinel/actions/runs/40382117517). Final source-to-UI and end-to-end HIL audit remains open. Physical paired-board validation remains separate.
 
 ## Quarter 4 — Qualification, packaging and demonstration (75–100%)
 
@@ -70,7 +72,9 @@
 | Quarter 1 overall | **IN PROGRESS** | Remaining protocol delivery, fault-model and full test gates above; automated workflows passed on Q1 implementation commit `9cbebcdd41d00e33586706363876270d0b3ab3d7` in [desktop CI](https://github.com/Ady5545/Sentinel/actions/runs/40370144382) and [firmware CI](https://github.com/Ady5545/Sentinel/actions/runs/40370144343) |
 | Quarter 2 host bridge/readiness | **Implemented and automated CI passed** | `electron/serial-manager.cjs`, `electron/main.cjs`, `electron/preload.cjs`, `src/vite-env.d.ts`, `src/App.tsx`; includes parsing the current firmware `[RECONCILE]` output, rejecting non-ASCII framing, and requiring paired reboot before clearing HIL faults |
 | Quarter 2 test coverage | **Passed on corrected source/test revision** | `electron/serial-manager.node-test.cjs`, `src/core/hil-evidence.test.ts`; [latest workflow run 40373668284](https://github.com/Ady5545/Sentinel/actions/runs/40373668284) passed |
-| Quarter 2 overall | **IMPLEMENTED — automated CI PASS** | Bridge hardening, typed parser, paired-reset fault latch, non-ASCII rejection, tests and renderer build passed on `a9e52b7a57a6135263cf316ab0c8de560dc64d5e` in [run 40373668284](https://github.com/Ady5545/Sentinel/actions/runs/40373668284). The latest update to this plan/progress ledger triggers a final documentation-head verification run. |
+| Quarter 2 overall | **IMPLEMENTED — automated CI PASS** | Bridge hardening, typed parser, paired-reset fault latch, non-ASCII rejection, tests and renderer build passed on `b1698dc038258932723909711407afe3e284a0cc` in [run 40373835953](https://github.com/Ady5545/Sentinel/actions/runs/40373835953). Physical paired-board behavior remains NOT VERIFIED. |
 | Physical UART qualification | **NOT VERIFIED** | Requires actual Uno + ESP32 paired logs; code changes cannot establish it |
+| Quarter 3 coordinator/replay | **FIRST SLICE IMPLEMENTED — automated CI PASS** | `src/core/research-session.ts`, `src/core/research-session.test.ts`, app integration in `src/App.tsx`; immutable versioned run snapshots, typed HIL command gating, synthetic-only replay and provenance-labelled JSON/CSV export passed in [run 40381930063](https://github.com/Ady5545/Sentinel/actions/runs/40381930063); current plan-updated head reverified in [run 40382117517](https://github.com/Ady5545/Sentinel/actions/runs/40382117517) |
+| Quarter 3 overall | **IN PROGRESS** | First slice passes automated CI. The actual desktop virtual-cash shadow now updates only through `reconcileHilShadowCommit` after exact permit/Uno commit/guardian reconciliation, and is quarantined on reset or transport loss. Remaining work: end-to-end UI/session audit and physical HIL qualification (not established by CI). |
 
-Quarter 1's open audit remains explicitly tracked and must not be represented as complete. No Quarter 3 work should begin until Quarter 2's exit gate is satisfied and reviewed.
+Quarter 1's open audit remains explicitly tracked and must not be represented as complete. Quarter 2's automated exit gate was satisfied on its exact branch head by [run 40373835953](https://github.com/Ady5545/Sentinel/actions/runs/40373835953); Quarter 3 implementation is now underway by user direction. Physical UART/HIL behavior remains NOT VERIFIED.
