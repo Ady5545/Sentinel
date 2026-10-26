@@ -149,6 +149,9 @@ export function reduceResearchRun(run: ResearchRunRecord, action: ResearchAction
   if (!expectedSession || expectedSession !== action.sessionId) {
     return freeze(run, 'Evidence session ID does not match the currently assigned ' + roleKey.toUpperCase() + ' board session.', at, roleKey === 'uno' ? 'UNO' : 'SENTINEL');
   }
+  if (!run.boardSessions.uno || !run.boardSessions.sentinel) {
+    return freeze(run, 'Protected HIL requires both assigned board sessions before accepting transaction evidence.', at, roleKey === 'uno' ? 'UNO' : 'SENTINEL');
+  }
 
   if (action.type === 'HIL_REQUEST') {
     if (!/^[A-Za-z0-9_-]{1,80}$/.test(action.transactionId) || !Number.isSafeInteger(action.amount) || action.amount <= 0) {
@@ -198,7 +201,7 @@ export function reduceResearchRun(run: ResearchRunRecord, action: ResearchAction
 
   if (action.type === 'HIL_DENY') {
     const tx = run.activeTransaction;
-    if (tx && tx.id !== action.transactionId) return mismatch(run, action.transactionId, action.amount, 'Denial transaction ID differs from the active transaction.', at, action.role);
+    if (tx && (tx.id !== action.transactionId || tx.amount !== action.amount)) return mismatch(run, action.transactionId, action.amount, 'Denial transaction ID or amount differs from the active transaction.', at, action.role);
     const nextTx: ResearchTransaction = { id: action.transactionId, amount: action.amount, phase: 'DENIED', permitSeen: false, unoCommitSeen: false, guardianAckSeen: false };
     return appendEvent({ ...run, activeTransaction: nextTx }, action.role, 'HIL_DENY', 'Transaction denied: ' + safeDetail(action.reason), 'BOARD_REPORTED', at, action.transactionId, action.amount);
   }
