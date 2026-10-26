@@ -11,7 +11,7 @@ import {
 import { canBeginHilWithdrawal, redactSensitiveSerialText, type HilShadowState, type HilTransaction } from './core/hil-evidence';
 import { createUnoHilAdapter, type UnoCommand } from './core/uno-hil-adapter';
 import {
-  canRecommissionHilShadow, createInitialResearchSession, replayRunRecords, researchPairReady,
+  canRecommissionHilShadow, createInitialResearchSession, replayRunRecords,
   researchSessionReducer, RESEARCH_SCENARIO_CATALOG, type ResearchMode, type ResearchRunRecord
 } from './core/research-session';
 
@@ -35,13 +35,6 @@ const initialBoards: Record<DeviceKey, BoardState> = {
 };
 const money = (value: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(value);
 const clock = () => new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-const HIL_RECONCILIATION_TIMEOUT_MS = 8000;
-
-function invalidateInFlightHilTransaction(current: HilTransaction | null, message: string): HilTransaction | null {
-  if (!current || ['RECONCILED', 'DENIED', 'REVOKED', 'MISMATCH'].includes(current.phase)) return current;
-  return { ...current, phase: 'MISMATCH', message };
-}
-
 export default function App() {
   const [state, dispatch] = useReducer(atmReducer, undefined, () => initialAtmState('protected'));
   const [research, dispatchResearch] = useReducer(researchSessionReducer, undefined, () => createInitialResearchSession(createResearchRunId('SIMULATION'), Date.now()));
