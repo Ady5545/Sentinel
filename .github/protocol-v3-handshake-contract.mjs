@@ -74,7 +74,10 @@ test("Uno serializes heartbeat/status traffic for SoftwareSerial", () => {
   const statusBranch = uno.search(/if\s*\(\s*STREQ\(type,\s*"STATUS"\)\s*\)/);
   assert.ok(statusBranch >= 0, "Uno must have a STATUS receive branch");
   assert.match(uno.slice(statusBranch, statusBranch + 420), /awaitingGuardianStatus\s*=\s*false\s*;/);
-  assert.match(esp, /if\s*\(!revokeLatched\)\s*sendFrame\("STATUS",\s*"HEALTHY"\);/);
+  assert.match(esp, /pendingHealthyStatus\s*=\s*true;/);
+  assert.match(esp, /HEALTHY_STATUS_TURNAROUND_MS\s*=\s*60UL/);
+  assert.match(esp, /if\s*\(pendingHealthyStatus[\s\S]*?sendFrame\("STATUS",\s*"HEALTHY"\)/,
+    "ESP32 must defer HEALTHY STATUS instead of replying inside the heartbeat RX handler");
   assert.match(protocol, /at most one.{0,80}HEARTBEAT/i);
   assert.match(protocol, /clears the outstanding-heartbeat flag only after receiving and validating that STATUS/i);
 });
