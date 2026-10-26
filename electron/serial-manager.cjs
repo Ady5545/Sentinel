@@ -87,7 +87,12 @@ function parseBoardLine(device, line) {
     const fields = parsedFields(line.slice('[DENY] '.length));
     return { type: 'DENY', id: safeId(fields.id), amount: safeAmount(fields.amount), reason: typeof fields.reason === 'string' ? redactSensitiveSerialText(fields.reason).slice(0, 64) : undefined };
   }
-  if (device === 'sentinel' && line.includes('[AUDIT] Matching controller-reported virtual transaction commit observed')) {
+  // This marker matches the current ESP32 firmware's actual USB console output.
+  // Keep the older research-console phrase accepted for backward-compatible logs.
+  if (device === 'sentinel' && (
+      line.startsWith('[RECONCILE] Matching controller-reported virtual commit ') ||
+      line.includes('[AUDIT] Matching controller-reported virtual transaction commit observed')
+  )) {
     const fields = parsedFields(line);
     return { type: 'COMMIT_RECONCILIATION', id: safeId(fields.id), amount: safeAmount(fields.amount) };
   }
