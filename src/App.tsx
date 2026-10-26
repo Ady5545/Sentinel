@@ -195,13 +195,28 @@ export default function App() {
     const api = window.sentinelDesktop;
     if (!api) { setExportStatus('Native evidence export is available in the desktop application, not browser preview.'); return; }
     const payload = {
-      product: 'SENTINEL Research Environment', schemaVersion: 1, exportedAt: new Date().toISOString(),
+      product: 'SENTINEL Research Environment', schemaVersion: 2, exportedAt: new Date().toISOString(),
       mode: state.mode,
+      researchSession: {
+        schemaVersion: research.schemaVersion,
+        mode: research.mode,
+        runId: research.runId,
+        sequence: research.sequence,
+        hilFaultLatched: research.hilFaultLatched,
+        faultResetBaseline: research.faultResetBaseline,
+        boardBootEpochs: research.boardBootEpochs,
+        boardSessions: research.boardSessions,
+        hilTransaction: research.hilTransaction,
+        hilShadow: research.hilShadow,
+        scenarioCatalog: RESEARCH_SCENARIO_CATALOG,
+        immutableRunRecords: replayRunRecords(research.records, research.runId),
+        recordRetention: 'Append-only in-memory run ledger; this export is a point-in-time copy and is not cryptographically signed.'
+      },
       evidenceProvenance: 'MIXED: simulated software state plus board-reported USB console text; no cryptographic hardware attestation',
       researchLimit: 'Virtual ATM only. No real cash, bank connection, or physical dispenser.',
       summary: { accountId: state.accountId, accountBalance: state.accountBalance, cassetteCash: state.cassetteCash, dispensedTotal: state.dispensedTotal, controllerState: state.controllerState, sentinelStatus: state.sentinelStatus, lastDecision: state.lastDecision, findings: state.findings },
       transactions: state.transactions,
-      events: state.events,
+      events: state.events.map(item => ({ ...item, detail: redactSensitiveSerialText(item.detail) })),
       hardware: {
         mode: 'OPTIONAL HARDWARE-IN-THE-LOOP OBSERVATION',
         provenance: 'BOARD-REPORTED USB console text; parsed correlation is not cryptographic attestation',
@@ -215,7 +230,13 @@ export default function App() {
     };
     const csvCell = (value: unknown) => '"' + String(value ?? '').replace(/"/g, '""') + '"';
     const csvRows = [
-      ...state.events.map(item => [item.at,item.id,item.severity,item.source,item.title,item.detail].map(csvCell).join(',')),
+      ...state.events.map(item => [item.at,item.id,item.severity,item.source,item.title,redactSensitiveSerialText(item.detail)].map(csvCell).join(',')),
+      ...research.records.map(record => {
+        const detail = redactSensitiveSerialText(record.runId + ' · ' + JSON.stringify(record.details));
+        const severe = /FAULT|MISMATCH|REVOK|DENY|BLOCKED|REQUIRED/i.test(record.kind + ' ' + detail);
+        const successful = /RECONCILED|COMMIT_APPLIED|SHADOW_RESET|RUN_STARTED/i.test(record.kind);
+        return [new Date(record.at).toISOString(),record.recordId,severe?'critical':successful?'success':'info',record.source + ' / ' + record.provenance,record.kind,detail].map(csvCell).join(',');
+      }),
       ...serialEvents.slice(-200).map((line,index) => {
         const parts = line.split(/\s+/);
         const time = parts[0] || '';
