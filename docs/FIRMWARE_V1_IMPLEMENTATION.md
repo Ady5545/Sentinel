@@ -1,65 +1,69 @@
-# SENTINEL UNO + ESP32 Firmware v1
+# SENTINEL UNO + ESP32 Firmware v2
 
-## Objective
-Implement the first real two-board firmware protocol for the SENTINEL research prototype. The Arduino Uno is the ATM primary-controller stand-in. The ESP32 DevKit is an independent guardian that evaluates messages and emits PERMIT/REVOKE observations. The desktop simulator remains the final authority over virtual cash; no board is connected to a physical dispenser.
+## Scope
 
-## Hardware and upload targets
-- Arduino IDE target: Arduino Uno / ATmega328P, 16 MHz.
-- Arduino IDE target: ESP32 Dev Module (confirm exact board variant in Tools > Board).
-- UART: 9600 baud, 8N1; no external libraries required.
-- USB diagnostic console: 115200 baud on each board.
-- UNO software UART: TX D3 and RX D2 using SoftwareSerial; keep hardware UART pins D0/D1 available for USB upload and diagnostics.
-- ESP32 UART2: RX GPIO16 and TX GPIO17.
-- Common GND.
-- UNO TX (5 V) to ESP32 RX must use a suitable level shifter or divider. Existing divider is 2.2 kΩ series and 2.2 kΩ to GND: nominally about 2.5 V, which may be marginal for guaranteed ESP32 high-level recognition. Prefer a proper 5 V-to-3.3 V level shifter or calculate a divider suitable for the actual input thresholds. Do not connect 5 V UNO TX directly to an ESP32 GPIO.
-- ESP32 TX is 3.3 V and can normally be read as HIGH by the UNO.
-- Boards are powered by USB; don't join 5 V and 3.3 V rails. Join grounds only.
-- Do not connect motors, solenoids, bank networks, or real ATM hardware.
+This v2 firmware changes SENTINEL from a heartbeat/demo-request foundation into a **configurable educational ATM-controller experiment** using only the existing Arduino Uno and ESP32 DevKit. It is still not production ATM firmware.
 
-## Protocol v1
-ASCII line frames, maximum 120 bytes including newline:
+The Uno hosts the ATM workflow for fictional RAM-only accounts. The ESP32 independently validates the peer protocol and applies guardian-side policy before issuing a one-shot permit for a single withdrawal request. The desktop app remains responsible for its own virtual-cash gate and user interface.
 
-    S1|TYPE|SESSION|SEQ|PAYLOAD|CRC16\n
+## Uno ATM state machine
 
-CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF, no reflection, xorout 0x0000), four uppercase hex digits, computed over every byte before the final |CRC separator. Reject malformed, overlong, unknown-version, invalid-CRC, invalid-session, unknown-type, invalid-field and stale/duplicate-sequence frames. Input buffers are fixed-size. A newline is required before a frame is considered complete. On overflow, discard through the next newline.
+- UNCOMMISSIONED: no demo account has been provisioned.
+- IDLE: commissioned, no active customer session.
+- PIN_PENDING: a configured demo card is selected; PIN entry must complete within 30 seconds.
+- AUTHENTICATED: PIN accepted; balance inquiry and withdrawals are available.
+- WITHDRAW_PENDING: withdrawal was locally validated and awaits a matching one-shot ESP32 decision.
+- LOCKED: the temporary PIN lockout is active.
+- GUARDIAN_LOCKED: guardian revocation, protocol invalidity or link timeout is latched; a clean paired restart is required.
 
-Types:
-- UNO → ESP32: HELLO, HEARTBEAT, STATE, EVENT, REQUEST
-- ESP32 → UNO: HELLO, ACK, PERMIT, REVOKE, STATUS
-- ESP32 STATUS and desktop bridge messages are observations only; no serial message directly dispenses virtual cash.
+A session expires after 60 seconds of customer inactivity. The default is three failed PIN attempts followed by a 60-second temporary lockout; both values are runtime-configurable in the full policy form. PIN change requires an authenticated session, the current PIN, a valid new PIN and matching confirmation. PIN failures are also sent as board-reported evidence so the ESP32 can apply a broader attempt-rate threshold. The Uno accepts no transaction while the guardian link is stale or revoked.
 
-Session is an 8–12 character uppercase alphanumeric boot token. Sequence starts at 1 and increases by one per outgoing frame in a session. Sequence gaps, duplicates and stale frames revoke protected authority; receiver must not update liveness on invalid frames. Session changes require explicit handshake and reset state to fail-closed. This simple token is not cryptographic authentication.
+## Runtime configuration instead of embedded credentials
 
-## UNO state machine
-BOOT_SAFE → IDLE → SESSION_ACTIVE → REQUEST_PENDING. Any malformed incoming guardian frame, guardian timeout, explicit REVOKE or invalid state transition enters GUARDIAN_LOCKED. Requests never cause physical output. The Uno reports a simulated controller state and accepts only a fresh guardian PERMIT observation for its current session; the desktop remains authoritative and independently validates the policy decision.
+No demo card, PIN, starting balance or note stock is hardcoded as a customer record. Use the USB serial command interface to provision up to four fictional demo accounts and a virtual cash-note inventory. Accounts, PINs, balances, policies, lockout state, note counts and audit history live in RAM and are cleared on reset. The desktop application is expected to provision its demo state after a fresh launch.
 
-UNO sends:
-- HELLO at boot and periodically until guardian response.
-- HEARTBEAT every 500 ms, including controller state and uptime.
-- STATE when state changes.
-- REQUEST for a generated demo dispense request only when the local state machine allows a test request.
-- EVENT for a defined demo event.
-UNO must not self-grant guardian authority.
+This choice intentionally avoids storing low-entropy demo PINs in source code or ordinary EEPROM and then making an unsupported claim that they are secure. It is not a substitute for a secure PIN-entry device, cryptographic PIN verification, protected key storage, durable account storage, or the payment-industry PIN security architecture used by real ATMs.
 
-## ESP32 guardian state machine
-STARTING → OBSERVING → PERMITTED (only after handshake, valid frames, fresh heartbeat and legal state) → REVOKED on malformed/stale/duplicate frames, illegal state, reported profile mismatch, sequence gap, heartbeat timeout, or explicit test fixture. Recovery requires explicit operator acknowledgement and a fresh handshake; never restore permit automatically after a revoke.
+## Uno USB command contract
 
-Evidence source labels:
-- BOARD_REPORTED: values sent by UNO, not independently verified.
-- PROTOCOL_VALIDATED: syntax/CRC/session/sequence checks passed.
-- SIMULATED: deliberately injected fixture.
-The ESP32 does not have a trusted secure element in this project. It cannot prove arbitrary firmware integrity.
+USB serial: 115200 baud, one command per newline.
 
-## Build and validation sequence
-1. Upload ESP32 sketch. Confirm SENTINEL ESP32 GUARDIAN READY on USB monitor at 115200.
-2. Upload Uno sketch. Confirm SENTINEL UNO CONTROLLER READY.
-3. Connect common GND, Uno D3 TX through a safe divider/level shifter to ESP32 GPIO16 RX, and ESP32 GPIO17 TX to Uno D2 RX. Do not wire D0/D1 to the peer board.
-4. Open one USB monitor at a time if needed; close Arduino IDE monitors before Electron takes serial ownership.
-5. Verify HELLO, ACK, heartbeat and protocol counters first.
-6. Run test fixtures: invalid CRC, stale sequence, malformed frame, heartbeat timeout, explicit simulated integrity mismatch, disconnect/reconnect. The expected result is REVOKE and lock, not a successful dispense.
-7. Verify that recovery requires explicit acknowledgement and new handshake.
-8. Desktop integration is a separate gate: board serial observations must be parsed, normalized and evaluated by the desktop domain gate before they affect virtual dispenser state.
-9. Do not claim end-to-end hardware protection until the desktop integration tests confirm denied requests leave both account balance and virtual cassette inventory unchanged.
+- ADD_ACCOUNT CARD_ID PIN START_BALANCE
+- SET_CASH COUNT_500 COUNT_200 COUNT_100 COUNT_50
+- SET_POLICY MAX_PER_TXN WINDOW_LIMIT (short form), or SET_POLICY MAX_PER_TXN WINDOW_LIMIT WINDOW_MS PIN_TRIES LOCKOUT_MS PIN_TIMEOUT_MS SESSION_TIMEOUT_MS GUARDIAN_TIMEOUT_MS TX_TIMEOUT_MS (full form)
+- CARD CARD_ID, PIN PIN, CHANGE_PIN CURRENT_PIN NEW_PIN CONFIRM_NEW_PIN, BALANCE, WITHDRAW AMOUNT, CANCEL, LOGOUT, STATUS, JOURNAL, HELP
+- FIXTURE_MISMATCH injects a labelled synthetic event and is a test-only control.
 
-## Limitations
-CRC detects accidental corruption, not a malicious sender. A self-reported firmware build identifier, state string or heartbeat is not attestation. An attacker controlling the UNO firmware can emit expected values. The demo proves only detection of the configured protocol and state-machine violations. The ESP32 is not a physical cash-dispenser interlock; this firmware cannot authorize a real ATM.
+Amounts are integer INR demo amounts. Withdrawals must be positive multiples of ₹50 and must pass authentication, account balance, the controller-side policy, the configured note inventory and guardian-side authorization. Note inventory is virtual only. There is no physical output pin for money.
+
+## V2 peer protocol
+
+Both sketches use newline-delimited frames:
+
+    S2|TYPE|SESSION|SEQ|PAYLOAD|CRC16\n
+
+Frames are bounded, parsed using fixed buffers, version checked, CRC checked, session checked and sequence checked. CRC-16/CCITT-FALSE is accidental-corruption detection, **not message authentication**.
+
+UNO → ESP32: HELLO, STATE, HEARTBEAT, EVENT, REQUEST  
+ESP32 → UNO: HELLO, ACK, STATUS, PERMIT, DENY, REVOKE
+
+For a withdrawal, the Uno transitions to WITHDRAW_PENDING, emits a unique increasing transaction ID and amount, and sends a framed REQUEST. The guardian requires fresh heartbeat evidence, the expected state, an authenticated-state report, a valid unseen transaction ID, denomination rules, and its own per-transaction/window limits. A valid request receives PERMIT id=<transaction-id>; policy rejection receives a correlated DENY. The Uno commits its RAM-only balance and note inventory only if a fresh PERMIT matches the exact pending ID. The guardian then expects a matching commit report within a timeout, otherwise it latches REVOKE. Any malformed/unknown frames, sequence gaps, illegal state changes, heartbeat timeout, replay, failed commit reconciliation, or labelled test fixture revokes guardian authority.
+
+This is stronger than generic permit freshness, but the guardian sees the Uno's state and authentication result as **reported by the Uno**. Those reports do not independently prove that a PIN was entered or that firmware is genuine. The desktop app must independently enforce the virtual dispenser gate and ensure account/cash state cannot mutate on DENY, REVOKE, timeout, stale permission or invalid evidence.
+
+The Uno's full policy form accepts budget window 60,000–86,400,000 ms, PIN failure threshold 1–10, lockout 5,000–900,000 ms, PIN-entry timeout 5,000–120,000 ms, session timeout 10,000–600,000 ms, guardian-link timeout 1,800–30,000 ms, and transaction-decision timeout 500–10,000 ms. The guardian has its own full policy command and its commit timeout should match the Uno transaction-decision timeout.
+
+## Validation sequence
+
+1. Compile the Uno and ESP32 sketches in CI.
+2. Flash the ESP32 and Uno; wire the peer UART exactly as described in firmware/README.md.
+3. Confirm V2 HELLO/ACK and recurring heartbeat/status.
+4. Provision only fictional demo account data, configure virtual note stock, then test successful PIN, wrong PIN, three-attempt lockout, timeout, balance query and valid withdrawal.
+5. Test insufficient balance, invalid denomination, out-of-stock note combinations, per-transaction limit, window limit, unknown card, malformed frames, duplicate/stale sequence, link loss, guardian fixture revocation and no-recovery-without-paired-reset.
+6. Keep serial logs. Confirm a successful withdrawal produces a correlated one-shot PERMIT and commit report; any denial/revoke/timeout leaves the desktop's virtual account and cassette inventory unchanged.
+7. Run the desktop app's integration tests and verify its domain-owned dispenser gate. Do not call the system end-to-end complete until this is implemented and tested on the live app.
+8. Bench-test both boards physically. CI compile success does not prove electrical wiring, runtime interoperability, deadline behavior or all attack cases.
+
+## Threat-model boundary
+
+The Uno has 2 KB SRAM and 32 KB flash. The prototype has no extra sensors, secure element, protected PIN pad, cryptographic device identity, protected key storage, secure boot configured, or physical dispenser interlock. CRC/session IDs/sequence counters do not stop an attacker who can forge frames. Runtime PIN verification and rate limits support a controlled teaching demo; they are not production PIN security. A compromised controller can lie about state; a compromised guardian can issue incorrect decisions. “Foolproof”, “unhackable”, “bank-grade”, “secure boot enabled”, and “arbitrary malware detected” are not supported claims.
