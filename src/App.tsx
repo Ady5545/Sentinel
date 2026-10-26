@@ -72,12 +72,33 @@ export default function App() {
   const [scenarioRuns, setScenarioRuns] = useState<ResearchRunRecord[]>([]);
   const recordedAtmEventCount = useRef(0);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [securityRunPhase, setSecurityRunPhase] = useState<'idle' | 'initializing' | 'inspecting' | 'revoking' | 'secured'>('idle');
   const [portMessage, setPortMessage] = useState('Board access is optional. The virtual ATM works without hardware.');
 
   useEffect(() => {
     const handle = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(handle);
   }, []);
+
+  useEffect(() => {
+    if (securityRunPhase === 'idle' || securityRunPhase === 'secured') return;
+    const delay = securityRunPhase === 'initializing' ? 1800 : securityRunPhase === 'inspecting' ? 2800 : 2200;
+    const handle = window.setTimeout(() => {
+      if (securityRunPhase === 'initializing') setSecurityRunPhase('inspecting');
+      else if (securityRunPhase === 'inspecting') {
+        dispatch({ type: 'RUN_COMPROMISE_SCENARIO' });
+        setSecurityRunPhase('revoking');
+      } else if (securityRunPhase === 'revoking') setSecurityRunPhase('secured');
+    }, delay);
+    return () => window.clearTimeout(handle);
+  }, [securityRunPhase]);
+
+  const runGuidedSecurityDemo = () => {
+    dispatch({ type: 'RESET_SCENARIO' });
+    dispatch({ type: 'SET_MODE', mode: 'protected' });
+    setSecurityRunPhase('initializing');
+    navigateTo('experiments');
+  };
 
   useEffect(() => {
     if (hilTransaction?.phase === 'RECONCILED') {
@@ -434,10 +455,10 @@ export default function App() {
         </div>
       </header>
       <div className="page-body">
-        {view === 'terminal' && <TerminalView state={state} dispatch={dispatch} onRunSecurityDemo={() => { dispatch({ type: 'RESET_SCENARIO' }); dispatch({ type: 'SET_MODE', mode: 'protected' }); dispatch({ type: 'RUN_COMPROMISE_SCENARIO' }); navigateTo('experiments'); }} />}
+        {view === 'terminal' && <TerminalView state={state} dispatch={dispatch} onRunSecurityDemo={runGuidedSecurityDemo} />}
         {view === 'machine' && <MachineView state={state} boards={boards} />}
         {view === 'sentinel' && <SentinelView state={state} boards={boards} />}
-        {view === 'experiments' && <><ExperimentView state={state} dispatch={dispatch} /><ResearchRunPanel run={researchRun} scenarioRuns={scenarioRuns} onReplay={replayScenario} /></>}
+        {view === 'experiments' && <>{securityRunPhase !== 'idle' && <GuidedRunProgress phase={securityRunPhase} onReplay={runGuidedSecurityDemo} />}<ExperimentView state={state} dispatch={dispatch} /><ResearchRunPanel run={researchRun} scenarioRuns={scenarioRuns} onReplay={replayScenario} /></>}
         {view === 'journal' && <JournalView events={combinedJournalEvents} alerts={alerts} onExport={exportEvidence} researchRun={researchRun} />}
         {view === 'hardware' && <HardwareView ports={ports} chosenPort={chosenPort} setChosenPort={setChosenPort} boards={boards} message={portMessage} serialEvents={serialEvents} refresh={refreshPorts} connect={connectBoard} disconnect={disconnectBoard} sendCommand={sendBoardCommand} sendTypedCommand={sendHilUnoCommand} researchMode={researchRun.mode} researchPhase={researchRun.phase} hilShadow={hilShadow} hilTransaction={hilTransaction} boardBootEpochs={boardBootEpochs} hilFaultResetBaseline={hilFaultResetBaseline} nowMs={nowMs} clearHilTransaction={() => { setHilTransaction(null); setHilTransactionStartedAt(null); setHilFaultResetBaseline(null); }} />}
         <footer className="status-footer"><span><i /> DOMAIN CORE ACTIVE</span><span>{eventCount.toString().padStart(3,'0')} EVENTS · {alerts.toString().padStart(2,'0')} ALERTS</span><span>OFFLINE ATM SIMULATOR · SECURITY RESEARCH ENVIRONMENT</span></footer>
@@ -462,6 +483,21 @@ function ScreenHeading({ number, eyebrow, title, description, action }: { number
 }
 function PanelTitle({ icon, title, suffix }: { icon: ReactNode; title: string; suffix?: string }) {
   return <div className="panel-title"><span>{icon}{title}</span>{suffix && <small>{suffix}</small>}</div>;
+}
+
+function GuidedRunProgress({ phase, onReplay }: { phase: 'initializing' | 'inspecting' | 'revoking' | 'secured'; onReplay: () => void }) {
+  const steps = [
+    { id: 'initializing', label: 'Initialize protected ATM', detail: 'Resetting the local scenario and enabling the protected policy path.' },
+    { id: 'inspecting', label: 'Inspect controller evidence', detail: 'Evaluating profile, privileged path, sequence, heartbeat, freshness and state-transition signals.' },
+    { id: 'revoking', label: 'Evaluate and revoke authority', detail: 'The scenario evidence has been submitted to the security engine; the authority decision is being presented.' },
+    { id: 'secured', label: 'Verify dispenser gate', detail: 'Review the resulting decision and confirm the virtual dispense is blocked.' }
+  ];
+  const activeIndex = steps.findIndex(step => step.id === phase);
+  return <section className={'guided-run-panel ' + (phase === 'secured' ? 'guided-run-complete' : '')} aria-live="polite">
+    <div className="guided-run-heading"><span className="guided-run-orb"><Activity size={19} /></span><div><div className="guided-run-kicker">SENTINEL LIVE SEQUENCE · SOFTWARE SIMULATION</div><h2>{phase === 'secured' ? 'Security sequence complete' : phase === 'revoking' ? 'Security decision in progress' : phase === 'inspecting' ? 'Inspecting controller telemetry' : 'Initializing protected environment'}</h2></div><span className={'guided-run-state ' + (phase === 'secured' ? 'complete' : '')}><i />{phase === 'secured' ? 'COMPLETE' : 'RUNNING'}</span></div>
+    <div className="guided-run-track">{steps.map((step, index) => <div key={step.id} className={'guided-run-step ' + (index < activeIndex ? 'done' : index === activeIndex ? 'active' : '')}><span className="guided-run-step-marker">{index < activeIndex ? '✓' : String(index + 1).padStart(2, '0')}</span><div><strong>{step.label}</strong><small>{step.detail}</small></div>{index === activeIndex && phase !== 'secured' && <span className="guided-run-spinner" aria-label="Processing" />}</div>)}</div>
+    <div className="guided-run-footer"><span><i /> LOCAL POLICY ENGINE</span><span>{phase === 'secured' ? 'Review findings below · no physical cash or bank network involved' : 'Processing controlled scenario inputs · please wait'}</span>{phase === 'secured' && <button onClick={onReplay}><RotateCcw size={13} /> Run again</button>}</div>
+  </section>;
 }
 
 function TerminalView({ state, dispatch, onRunSecurityDemo }: { state: AtmState; dispatch: Dispatch<AtmAction>; onRunSecurityDemo: () => void }) {
