@@ -5,16 +5,12 @@ on:
     branches: [main]
     paths:
       - "firmware/**"
-      - ".github/protocol-v3-handshake-contract.mjs"
-      - ".github/protocol-v3-model.node.mjs"
-      - "docs/SENTINEL_PROTOCOL.md"
+      - ".github/easy-demo-contract.mjs"
       - ".github/workflows/firmware-build.yml"
   pull_request:
     paths:
       - "firmware/**"
-      - ".github/protocol-v3-handshake-contract.mjs"
-      - ".github/protocol-v3-model.node.mjs"
-      - "docs/SENTINEL_PROTOCOL.md"
+      - ".github/easy-demo-contract.mjs"
       - ".github/workflows/firmware-build.yml"
   workflow_dispatch:
 
@@ -43,17 +39,11 @@ jobs:
         run: arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
       - name: Install board core
         run: arduino-cli core install "${{ matrix.core }}" --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
-      - name: Update Arduino library index
-        if: matrix.fqbn == 'arduino:avr:uno'
-        run: arduino-cli lib update-index
-      - name: Install AltSoftSerial
-        if: matrix.fqbn == 'arduino:avr:uno'
-        run: arduino-cli lib install "AltSoftSerial"
       - name: Compile firmware
         run: arduino-cli compile --warnings all --fqbn "${{ matrix.fqbn }}" "${{ matrix.sketch }}"
 
-  protocol-tests:
-    name: V3 protocol contract tests
+  easy-demo-tests:
+    name: Easy demo firmware contract tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -62,5 +52,5 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Run protocol contract tests
-        run: node --test .github/protocol-v3-handshake-contract.mjs .github/protocol-v3-model.node.mjs
+      - name: Run easy demo contract tests
+        run: node --test .github/easy-demo-contract.mjs
