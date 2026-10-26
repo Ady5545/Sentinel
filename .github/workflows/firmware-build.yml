@@ -5,13 +5,13 @@ on:
     branches: [main]
     paths:
       - "firmware/**"
-      - "tests/**"
+      - ".github/protocol-v3-handshake-contract.mjs"
       - "docs/SENTINEL_PROTOCOL.md"
       - ".github/workflows/firmware-build.yml"
   pull_request:
     paths:
       - "firmware/**"
-      - "tests/**"
+      - ".github/protocol-v3-handshake-contract.mjs"
       - "docs/SENTINEL_PROTOCOL.md"
       - ".github/workflows/firmware-build.yml"
   workflow_dispatch:
@@ -55,4 +55,4 @@ jobs:
         with:
           node-version: 20
       - name: Run protocol contract tests
-        run: node --test tests/protocol-v3-handshake.test.mjs
+        run: node --test .github/protocol-v3-handshake-contract.mjs
