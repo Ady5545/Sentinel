@@ -40,6 +40,7 @@ export interface PendingWithdrawal {
 }
 export interface SimulationPermit {
   id: string;
+  runId: string;
   transactionId: string;
   amount: number;
   issuedAtMs: number;
@@ -47,6 +48,7 @@ export interface SimulationPermit {
   evidenceSource: 'SIMULATED';
 }
 export interface AtmState {
+  runId: string;
   mode: SecurityMode;
   screen: TerminalScreen;
   service: Service | null;
@@ -104,7 +106,7 @@ function updateWithEvent(state: AtmState, severity: Severity, source: JournalEve
 }
 export function initialAtmState(mode: SecurityMode = 'protected'): AtmState {
   const initial: AtmState = {
-    mode, screen: 'welcome', service: null, pinBuffer: '', failedPinAttempts: 0, authenticated: false,
+    runId: makeId('RUN'), mode, screen: 'welcome', service: null, pinBuffer: '', failedPinAttempts: 0, authenticated: false,
     accountId: 'SIM-1001', accountBalance: START_BALANCE, cassetteCash: START_CASSETTE_CASH,
     dispensedTotal: 0, selectedAmount: 1000, receiptMessage: '', lastTransaction: null, transactions: [],
     controllerState: 'READY', sentinelStatus: 'MONITORING', lastDecision: 'NONE', findings: [],
@@ -228,7 +230,7 @@ export function atmReducer(state: AtmState, action: AtmAction): AtmState {
             receiptMessage: 'WITHDRAWAL DENIED\n' + findings.join(' ') });
       }
       const permit: SimulationPermit = {
-        id: makeId('SIM-PERMIT'), transactionId: pending.id, amount: pending.amount,
+        id: makeId('SIM-PERMIT'), runId: state.runId, transactionId: pending.id, amount: pending.amount,
         issuedAtMs: nowMs, expiresAtMs: nowMs + SIMULATION_PERMIT_TTL_MS,
         evidenceSource: 'SIMULATED'
       };
@@ -242,7 +244,7 @@ export function atmReducer(state: AtmState, action: AtmAction): AtmState {
       const isBaseline = state.mode === 'baseline';
       const permit = state.simulationPermit;
       const permitValid = !isBaseline && Boolean(permit &&
-        permit.transactionId === pending.id && permit.amount === pending.amount &&
+        permit.runId === state.runId && permit.transactionId === pending.id && permit.amount === pending.amount &&
         permit.issuedAtMs <= nowMs && nowMs < permit.expiresAtMs &&
         permit.expiresAtMs > permit.issuedAtMs && permit.evidenceSource === 'SIMULATED' &&
         state.lastDecision === 'PERMIT' && state.sentinelStatus === 'MONITORING' &&
