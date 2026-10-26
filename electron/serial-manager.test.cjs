@@ -11,7 +11,7 @@ test('UNO allowlist accepts only documented, well-formed operator commands', () 
   assert.equal(validateBoardCommand('uno', 'WITHDRAW 500').ok, true);
   assert.equal(validateBoardCommand('uno', 'WITHDRAW 520').ok, false);
   assert.equal(validateBoardCommand('uno', 'RUN_SHELL rm -rf /').ok, false);
-  assert.equal(validateBoardCommand('uno', 'STATUS\\nFIXTURE_MISMATCH').ok, false);
+  assert.equal(validateBoardCommand('uno', 'STATUS' + String.fromCharCode(10) + 'FIXTURE_MISMATCH').ok, false);
   assert.equal(validateBoardCommand('uno', 'PIN 123').ok, false);
 });
 
@@ -34,7 +34,7 @@ test('command validation prevents secret text from being needed in diagnostics',
 test('command parser rejects control characters, padding and overlong values', () => {
   assert.equal(validateBoardCommand('uno', ' STATUS').ok, false);
   assert.equal(validateBoardCommand('uno', 'STATUS ').ok, false);
-  assert.equal(validateBoardCommand('uno', 'STATUS\\r').ok, false);
+  assert.equal(validateBoardCommand('uno', 'STATUS' + String.fromCharCode(13)).ok, false);
   assert.equal(validateBoardCommand('uno', 'X'.repeat(97)).ok, false);
   assert.equal(validateBoardCommand('invalid', 'STATUS').ok, false);
 });

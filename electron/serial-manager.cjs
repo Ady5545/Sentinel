@@ -22,7 +22,7 @@ function validateBoardCommand(device, command) {
   if (typeof command !== 'string' || command.length < 1 || command.length > 96) {
     return { ok: false, error: 'Command must contain 1–96 characters.' };
   }
-  if (command !== command.trim() || /[\\r\\n\\x00-\\x1F\\x7F]/.test(command) || /[^\\x20-\\x7E]/.test(command)) {
+  if (command !== command.trim() || [...command].some(character => { const code = character.charCodeAt(0); return code < 0x20 || code > 0x7E; })) {
     return { ok: false, error: 'Command contains whitespace padding or disallowed control/non-ASCII characters.' };
   }
   const parts = command.split(/ +/);
@@ -30,7 +30,7 @@ function validateBoardCommand(device, command) {
   const [name, ...args] = parts;
   const integer = (value, min, max) => safeInteger(value, min, max);
   const card = value => /^[A-Z0-9_-]{1,16}$/.test(value);
-  const pin = value => /^\\d{4,6}$/.test(value);
+  const pin = value => typeof value === 'string' && value.length >= 4 && value.length <= 6 && [...value].every(character => character >= '0' && character <= '9');
   let valid = false;
 
   if (SIMPLE_COMMANDS[device].has(name) && args.length === 0) valid = true;
@@ -106,7 +106,7 @@ class SerialManager extends EventEmitter {
     if (!state || !state.port.isOpen) throw new Error(device.toUpperCase() + ' serial port is not open.');
     const requestId = randomUUID();
     await new Promise((resolve, reject) => {
-      state.port.write(command + '\\n', error => {
+      state.port.write(command + String.fromCharCode(10), error => {
         if (error) { reject(error); return; }
         state.port.drain(drainError => drainError ? reject(drainError) : resolve());
       });
