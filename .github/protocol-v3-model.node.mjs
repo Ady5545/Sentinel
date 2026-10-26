@@ -326,6 +326,7 @@ class ReliableCommitExchange {
     const decoded = decodeFrame(frame);
     const expected = `ack_seq=4;id=${this.id};amount=${this.amount}`;
     if (!this.awaitingAck || !decoded.ok || decoded.frame.type !== "ACK" ||
+        decoded.frame.session !== "U0000003C" ||
         decoded.frame.payload !== expected || decoded.frame.seq !== 7) {
       this.faulted = true;
       return { ok: false, reason: "ACK_MISMATCH" };
