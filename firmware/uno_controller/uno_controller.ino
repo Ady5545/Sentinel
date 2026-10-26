@@ -768,7 +768,9 @@ void handleGuardianLine(char *line) {
       txCommitAwaitingAck = false;
       txCommitAttempts = 0;
       Serial.print(F("[COMMIT_ACK] Exact guardian acknowledgement accepted for id="));
-      Serial.println(txCommitReportId);
+      Serial.print(txCommitReportId);
+      Serial.print(F("; amount="));
+      Serial.println(txCommitReportAmount);
       statePublished = false;
       sendState();
       return;
