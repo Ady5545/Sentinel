@@ -23,12 +23,14 @@
 
 static const uint8_t PEER_RX_PIN = 2;
 static const uint8_t PEER_TX_PIN = 3;
-static const unsigned long PEER_BAUD = 9600;
+static const unsigned long PEER_BAUD = 4800;
 static const unsigned long USB_BAUD = 115200;
 static const unsigned long HEARTBEAT_MS = 500;
 static const unsigned long HELLO_RETRY_MS = 650UL;
 static const unsigned long HANDSHAKE_TIMEOUT_MS = 8000UL;
 static const unsigned long DEFAULT_GUARDIAN_TIMEOUT_MS = 2600UL;
+static const unsigned long HEALTHY_STATUS_DUPLICATE_WINDOW_MS = 600UL;
+static const uint8_t MAX_INITIAL_STATUS_FRAME_DROPS = 3;
 static const unsigned long DEFAULT_TRANSACTION_DECISION_TIMEOUT_MS = 1800UL;
 static const unsigned long DEFAULT_PIN_ENTRY_TIMEOUT_MS = 30000UL;
 static const unsigned long DEFAULT_SESSION_TIMEOUT_MS = 60000UL;
@@ -111,6 +113,8 @@ uint32_t txSequence = 0;
 uint32_t lastGuardianSequence = 0;
 uint32_t lastGuardianFrameAt = 0;
 uint32_t lastGuardianStatusAt = 0;
+uint32_t lastGuardianStatusSequence = 0;
+uint8_t initialHealthyFrameDrops = 0;
 uint32_t lastHeartbeatAt = 0;
 uint32_t lastHelloAt = 0;
 uint32_t handshakeStartedAt = 0;
@@ -531,6 +535,20 @@ void handleGuardianLine(char *line) {
   char fields[5][48] = {{0}};
   uint32_t seq = 0;
   if (!parseFrame(line, fields, seq)) {
+    // Before the first healthy STATUS, no permit can be authorized. Permit a
+    // small, bounded number of corrupted startup liveness frames so the ESP32
+    // can retry the exact STATUS sequence. Never refresh freshness on bad data.
+    if (handshakeComplete && awaitingGuardianStatus && lastGuardianStatusAt == 0 &&
+        !guardianRevokeLatched &&
+        initialHealthyFrameDrops < MAX_INITIAL_STATUS_FRAME_DROPS) {
+      ++initialHealthyFrameDrops;
+      Serial.print(F("[LINK_RETRY] Dropped malformed pre-healthy frame "));
+      Serial.print(initialHealthyFrameDrops);
+      Serial.print('/');
+      Serial.print(MAX_INITIAL_STATUS_FRAME_DROPS);
+      Serial.println(F("; awaiting valid HEALTHY STATUS."));
+      return;
+    }
     Serial.print(F("[LINK_RX] Rejected malformed guardian frame: "));
     Serial.println(line);
     enterGuardianLock(F("Malformed guardian frame or CRC/version validation failure."));
@@ -546,6 +564,18 @@ void handleGuardianLine(char *line) {
   }
   const char *type = fields[1];
   const char *payload = fields[4];
+
+  // A retransmitted HEALTHY status uses its original sequence. Accept only an
+  // exact duplicate of the most recently accepted STATUS inside the short
+  // retry window; never refresh the status timestamp for a duplicate.
+  if (!guardianRevokeLatched && handshakeComplete &&
+      lastGuardianStatusSequence != 0 &&
+      seq == lastGuardianStatusSequence && seq == lastGuardianSequence &&
+      STREQ(type, "STATUS") && STREQ(payload, "HEALTHY") &&
+      (uint32_t)(millis() - lastGuardianStatusAt) <= HEALTHY_STATUS_DUPLICATE_WINDOW_MS) {
+    Serial.println(F("[LINK_RETRY] Duplicate HEALTHY STATUS ignored."));
+    return;
+  }
 
   // A repeated, identical guardian HELLO is a handshake retry, not a new message.
   if (guardianHelloSeen && seq == 1 && STREQ(type, "HELLO") &&
@@ -617,6 +647,8 @@ void handleGuardianLine(char *line) {
       return;
     }
     lastGuardianStatusAt = millis();
+    lastGuardianStatusSequence = seq;
+    initialHealthyFrameDrops = 0;
     guardianLink = LINK_OBSERVING;
     awaitingGuardianStatus = false;
     Serial.print(F("[STATUS_RX] Accepted HEALTHY seq="));
