@@ -215,3 +215,14 @@ test("ESP32 safely drops malformed pre-session UART noise and keeps revocation l
   assert.match(malformedBranch, /revoke\("Malformed frame, overlong input, CRC or protocol-version failure\."\)/,
     "malformed frames after session establishment must still fail closed");
 });
+
+
+test("desktop HIL ACK evidence carries the exact transaction ID and amount from both boards", () => {
+  assert.ok(esp.includes('Serial.print(F("[COMMIT_ACK_TX] ACK sequence="));'));
+  assert.ok(esp.includes('Serial.print(F("; id="));'));
+  assert.ok(esp.includes('Serial.print(F("; amount="));'));
+  assert.ok(esp.includes('Serial.println(amount);'));
+  assert.ok(uno.includes('Serial.print(F("[COMMIT_ACK] Exact guardian acknowledgement accepted for id="));'));
+  assert.ok(uno.includes('Serial.print(F("; amount="));'));
+  assert.ok(uno.includes('Serial.println(txCommitReportAmount);'));
+});
