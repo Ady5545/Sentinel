@@ -303,6 +303,13 @@ export function reduceHilShadowObservation(state: HilShadowState, line: string):
  * Apply the desktop-owned virtual shadow gate after exact permit, Uno commit,
  * and guardian reconciliation reports have matched. This never controls physical cash.
  */
+/** Quarantine a commissioned shadow after transport, reset, or authority loss. */
+export function invalidateHilShadow(state: HilShadowState, reason: string): HilShadowState {
+  if (!state.accountConfigured && !state.cassetteConfigured &&
+      state.committedTransactionIds.length === 0 && state.status === 'UNCOMMISSIONED') return state;
+  return { ...state, status: 'RECONCILIATION REQUIRED', error: reason };
+}
+
 export function reconcileHilShadowCommit(state: HilShadowState, transaction: HilTransaction): HilShadowState {
   if (transaction.phase !== 'RECONCILED' ||
       state.processedTransactionIds.includes(transaction.id)) return state;

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   canBeginHilWithdrawal,
   initialHilShadowState,
+  invalidateHilShadow,
   parseKeyValueText,
   planHilNotes,
   reconcileHilShadowCommit,
@@ -139,6 +140,15 @@ describe('HIL desktop shadow dispenser gate', () => {
     expect(result.accountBalance).toBe(50000);
     expect(result.cassetteCash).toBe(17000);
     expect(result.dispensedTotal).toBe(0);
+  });
+
+  it('quarantines a commissioned shadow after a board/session failure without altering money state', () => {
+    const shadow = commissioned();
+    const invalidated = invalidateHilShadow(shadow, 'Board reset observed.');
+    expect(invalidated.status).toBe('RECONCILIATION REQUIRED');
+    expect(invalidated.accountBalance).toBe(shadow.accountBalance);
+    expect(invalidated.cassetteCash).toBe(shadow.cassetteCash);
+    expect(invalidated.error).toContain('Board reset');
   });
 
   it('denomination planner agrees with the 500/200/100/50 virtual cassette rules', () => {
