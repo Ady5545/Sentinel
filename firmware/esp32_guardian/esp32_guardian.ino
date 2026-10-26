@@ -273,6 +273,10 @@ void handleState(const char *payload) {
     revoke("Invalid STATE transaction counter.");
     return;
   }
+  if (txCount != committedTransactions) {
+    revoke("Controller-reported committed transaction count diverged from guardian observations.");
+    return;
+  }
   if (!transitionAllowed(lastAtmState, nextState)) {
     revoke("Illegal ATM state transition.");
     return;
