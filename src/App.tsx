@@ -370,7 +370,7 @@ export default function App() {
         {view === 'machine' && <MachineView state={state} boards={boards} />}
         {view === 'sentinel' && <SentinelView state={state} boards={boards} />}
         {view === 'experiments' && <ExperimentView state={state} dispatch={dispatch} />}
-        {view === 'journal' && <JournalView events={combinedJournalEvents} alerts={alerts} onExport={exportEvidence} />}
+        {view === 'journal' && <JournalView events={combinedJournalEvents} alerts={alerts} onExport={exportEvidence} researchRecords={research.records} currentRunId={research.runId} />}
         {view === 'hardware' && <HardwareView ports={ports} chosenPort={chosenPort} setChosenPort={setChosenPort} boards={boards} message={portMessage} serialEvents={serialEvents} refresh={refreshPorts} connect={connectBoard} disconnect={disconnectBoard} sendCommand={sendBoardCommand} researchMode={research.mode} researchRunId={research.runId} hilShadow={research.hilShadow} hilFaultLatched={research.hilFaultLatched} canRecommissionFault={canRecommissionHilShadow(research, nowMs)} researchRecords={research.records} hilTransaction={hilTransaction} nowMs={nowMs} clearHilTransaction={clearHilRecord} />}
         <footer className="status-footer"><span><i /> DOMAIN CORE ACTIVE</span><span>{eventCount.toString().padStart(3,'0')} EVENTS · {alerts.toString().padStart(2,'0')} ALERTS</span><span>FICTIONAL ACCOUNT · VIRTUAL CASH · RESEARCH PROTOTYPE</span></footer>
       </div>
