@@ -312,3 +312,27 @@ test('renderer reload after HIL commissioning latches authority until paired reb
   assert.equal(h.manager.getReadinessSnapshot().hilFaultLatched, false);
   assert.equal(h.manager.getReadinessSnapshot().hilShadowTouched, false);
 });
+
+
+test('leaving a commissioned HIL run latches authority before a later HIL run', async () => {
+  const h = makeHarness();
+  const pair = await h.connectPair();
+  pair.uno.feed('SENTINEL ATM CONTROLLER V3.4 READY\n');
+  pair.sentinel.feed('SENTINEL ESP32 GUARDIAN V3.4 READY\n');
+  await h.markPairReady();
+  h.manager.setResearchMode('HIL');
+
+  pair.uno.feed('ATM_EVENT|ACCOUNT_PROVISIONED|card=CARD01;balance=50000\n');
+  pair.uno.feed('ATM_EVENT|CASH_CONFIGURED|currency=INR;notes500=20;notes200=20;notes100=20;notes50=20;total=17000\n');
+  assert.equal(h.manager.getReadinessSnapshot().hilShadowTouched, true);
+
+  assert.deepEqual(h.manager.setResearchMode('SIMULATION'), { ok: true, mode: 'SIMULATION' });
+  assert.equal(h.manager.getReadinessSnapshot().hilFaultLatched, true);
+  assert.equal(h.manager.setResearchMode('HIL').ok, false);
+
+  pair.uno.feed('SENTINEL ATM CONTROLLER V3.4 READY\n');
+  pair.sentinel.feed('SENTINEL ESP32 GUARDIAN V3.4 READY\n');
+  await h.markPairReady();
+  assert.deepEqual(h.manager.clearHilFault(), { ok: true });
+  assert.deepEqual(h.manager.setResearchMode('HIL'), { ok: true, mode: 'HIL' });
+});
