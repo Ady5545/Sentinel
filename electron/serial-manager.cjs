@@ -280,16 +280,16 @@ class SerialManager extends EventEmitter {
     return { ok: true, mode };
   }
 
-  canClearHilFault() {
+  canClearHilFault(pairReady) {
     const baseline = this.faultResetBaseline;
     return this.hilFaultLatched && baseline !== null &&
       this.boardBootEpochs.uno > baseline.uno &&
       this.boardBootEpochs.sentinel > baseline.sentinel &&
-      this.isPairReady();
+      pairReady === true;
   }
 
   clearHilFault() {
-    if (!this.canClearHilFault()) {
+    if (!this.canClearHilFault(this.isPairReady())) {
       return { ok: false, error: 'Fault remains latched until both boards reboot after the fault and fresh paired readiness is observed.' };
     }
     this.hilFaultLatched = false;
@@ -345,7 +345,7 @@ class SerialManager extends EventEmitter {
       this.now() - sentinel.readinessAt <= this.freshnessMs;
     return { pairReady, freshnessMs: this.freshnessMs, researchMode: this.researchMode, boards,
       hilFaultLatched: this.hilFaultLatched, faultResetBaseline: this.faultResetBaseline,
-      boardBootEpochs: { ...this.boardBootEpochs }, canClearHilFault: this.canClearHilFault(),
+      boardBootEpochs: { ...this.boardBootEpochs }, canClearHilFault: this.canClearHilFault(pairReady),
       hilShadowTouched: this.hilShadowTouched };
   }
 
