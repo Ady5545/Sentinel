@@ -782,6 +782,12 @@ void pollUno() {
     if (c == '\n') {
       if (!droppingLongFrame && rxLength > 0) {
         rxBuffer[rxLength] = '\0';
+        if (!handshakeConfirmed) {
+          Serial.print(F("[UART_RX] startup frame bytes="));
+          Serial.print(rxLength);
+          Serial.print(F(" data="));
+          Serial.println(rxBuffer);
+        }
         handleUnoLine(rxBuffer);
       } else if (droppingLongFrame) {
         if (sessionEstablished) {
