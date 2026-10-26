@@ -785,7 +785,12 @@ void handleSetCash(char *c500, char *c200, char *c100, char *c50) {
   cashInventory.notes200 = (uint16_t)v200;
   cashInventory.notes100 = (uint16_t)v100;
   cashInventory.notes50 = (uint16_t)v50;
-  emitEvent(F("CASH_CONFIGURED"), F("currency=INR;values=500,200,100,50"));
+  const uint32_t total = v500 * 500UL + v200 * 200UL + v100 * 100UL + v50 * 50UL;
+  char details[88];
+  snprintf_P(details, sizeof(details), PSTR("currency=INR;notes500=%lu;notes200=%lu;notes100=%lu;notes50=%lu;total=%lu"),
+             (unsigned long)v500, (unsigned long)v200, (unsigned long)v100, (unsigned long)v50,
+             (unsigned long)total);
+  emitEvent(F("CASH_CONFIGURED"), details);
 }
 
 void handleSetPolicy(char **argv, uint8_t argc) {

@@ -120,6 +120,12 @@ test("guardian commit-reconciliation log includes the exact matched transaction 
   assert.ok(esp.includes('Serial.println(pendingPermitAmount);'));
 });
 
+test("Uno reports exact virtual cassette counts and total for the desktop shadow", () => {
+  assert.ok(uno.includes('notes500=%lu;notes200=%lu;notes100=%lu;notes50=%lu;total=%lu'));
+  assert.ok(uno.includes('emitEvent(F("CASH_CONFIGURED"), details);'));
+  assert.ok(uno.includes('v500 * 500UL + v200 * 200UL + v100 * 100UL + v50 * 50UL'));
+});
+
 test("both boards use the same slower peer UART and bounded status retry contract", () => {
   assert.match(uno, /PEER_BAUD\s*=\s*4800/);
   assert.match(esp, /PEER_BAUD\s*=\s*4800/);
