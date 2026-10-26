@@ -109,6 +109,7 @@ bool droppingUsbLine = false;
 uint32_t txSequence = 0;
 uint32_t lastGuardianSequence = 0;
 uint32_t lastGuardianFrameAt = 0;
+uint32_t lastGuardianStatusAt = 0;
 uint32_t lastHeartbeatAt = 0;
 uint32_t lastHelloAt = 0;
 bool handshakeComplete = false;
@@ -326,8 +327,8 @@ bool hasConfiguredAccount() {
 bool guardianFresh() {
   return handshakeComplete && !guardianRevokeLatched &&
          guardianLink == LINK_OBSERVING &&
-         lastGuardianFrameAt != 0 &&
-         (uint32_t)(millis() - lastGuardianFrameAt) <= guardianTimeoutMs;
+         lastGuardianStatusAt != 0 &&
+         (uint32_t)(millis() - lastGuardianStatusAt) <= guardianTimeoutMs;
 }
 
 void sendState() {
@@ -522,6 +523,11 @@ void handleGuardianLine(char *line) {
     }
   } else if (STREQ(type, "STATUS")) {
     if (guardianRevokeLatched) return;
+    if (!STREQ(payload, "HEALTHY")) {
+      enterGuardianLock(F("Malformed or non-healthy guardian status."));
+      return;
+    }
+    lastGuardianStatusAt = millis();
     guardianLink = LINK_OBSERVING;
   } else if (STREQ(type, "PERMIT")) {
     if (!guardianFresh() || atmState != ATM_WITHDRAW_PENDING ||
@@ -989,9 +995,10 @@ void loop() {
   if (handshakeComplete && now - lastHeartbeatAt >= HEARTBEAT_MS)
     sendHeartbeat(now);
 
-  if (handshakeComplete && lastGuardianFrameAt != 0 &&
-      (uint32_t)(now - lastGuardianFrameAt) > guardianTimeoutMs) {
-    enterGuardianLock(F("Guardian response timeout."));
+  if (handshakeComplete && !guardianRevokeLatched) {
+    const uint32_t freshnessBase = lastGuardianStatusAt ? lastGuardianStatusAt : lastGuardianFrameAt;
+    if (freshnessBase != 0 && (uint32_t)(now - freshnessBase) > guardianTimeoutMs)
+      enterGuardianLock(F("Guardian status timeout."));
   }
 
   if (atmState == ATM_PIN_PENDING &&
