@@ -158,7 +158,9 @@ describe('HIL desktop shadow dispenser gate', () => {
     const shadow = commissioned();
     const tx: HilTransaction = {
       id: 'T0000007', amount: 500, phase: 'UNO COMMITTED', permitSeen: true,
-      unoCommitSeen: true, guardianCommitSeen: false, balance: 49500, message: 'awaiting guardian'
+      unoCommitSeen: true, guardianCommitSeen: false,
+      guardianAckSentSeen: false,
+      unoAckAcceptedSeen: false,balance: 49500, message: 'awaiting guardian'
     };
     expect(reconcileHilShadowCommit(shadow, tx)).toBe(shadow);
   });
