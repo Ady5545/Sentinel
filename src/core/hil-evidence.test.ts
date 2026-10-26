@@ -21,6 +21,8 @@ const requested: HilTransaction = {
   permitSeen: false,
   unoCommitSeen: false,
   guardianCommitSeen: false,
+  guardianAckSentSeen: false,
+  unoAckAcceptedSeen: false,
   message: 'Uno reported a pending fictional withdrawal.'
 };
 
@@ -125,7 +127,9 @@ describe('HIL desktop shadow dispenser gate', () => {
 
     const tx: HilTransaction = {
       id: 'T0000007', amount: 500, phase: 'RECONCILED', permitSeen: true,
-      unoCommitSeen: true, guardianCommitSeen: true, balance: 49500, message: 'matched'
+      unoCommitSeen: true, guardianCommitSeen: true,
+      guardianAckSentSeen: true,
+      unoAckAcceptedSeen: true, balance: 49500, message: 'matched'
     };
     shadow = reconcileHilShadowCommit(shadow, tx);
     expect(shadow.accountBalance).toBe(49500);
@@ -151,7 +155,9 @@ describe('HIL desktop shadow dispenser gate', () => {
     const shadow = commissioned();
     const tx: HilTransaction = {
       id: 'T0000007', amount: 500, phase: 'RECONCILED', permitSeen: true,
-      unoCommitSeen: true, guardianCommitSeen: true, balance: 123, message: 'matched'
+      unoCommitSeen: true, guardianCommitSeen: true,
+      guardianAckSentSeen: true,
+      unoAckAcceptedSeen: true, balance: 123, message: 'matched'
     };
     const result = reconcileHilShadowCommit(shadow, tx);
     expect(result.status).toBe('RECONCILIATION REQUIRED');
@@ -245,7 +251,9 @@ describe('post-commit shadow integrity', () => {
     );
     return reconcileHilShadowCommit(shadow, {
       id: 'T0000007', amount: 500, phase: 'RECONCILED', permitSeen: true,
-      unoCommitSeen: true, guardianCommitSeen: true, balance: 49500, message: 'matched'
+      unoCommitSeen: true, guardianCommitSeen: true,
+      guardianAckSentSeen: true,
+      unoAckAcceptedSeen: true, balance: 49500, message: 'matched'
     });
   };
 
