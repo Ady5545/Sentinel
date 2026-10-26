@@ -9,8 +9,8 @@ import {
   type AtmAction, type AtmState, type JournalEvent, type Service
 } from './core/atm-engine';
 import {
-  canBeginHilWithdrawal, parseKeyValueText, redactSensitiveSerialText, reduceHilTransaction,
-  reduceStructuredHilTransaction, type HilTransaction
+  canBeginHilWithdrawal, canClearHilFaultAfterPairedReset, parseKeyValueText, redactSensitiveSerialText, reduceHilTransaction,
+  reduceStructuredHilTransaction, type HilBoardResetEpochs, type HilTransaction
 } from './core/hil-evidence';
 
 type View = 'terminal' | 'machine' | 'sentinel' | 'experiments' | 'journal' | 'hardware';
@@ -52,6 +52,8 @@ export default function App() {
   const [serialEvents, setSerialEvents] = useState<string[]>([]);
   const [hilTransaction, setHilTransaction] = useState<HilTransaction | null>(null);
   const [hilTransactionStartedAt, setHilTransactionStartedAt] = useState<number | null>(null);
+  const [boardBootEpochs, setBoardBootEpochs] = useState<HilBoardResetEpochs>({ uno: 0, sentinel: 0 });
+  const [hilFaultResetBaseline, setHilFaultResetBaseline] = useState<HilBoardResetEpochs | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [portMessage, setPortMessage] = useState('Board access is optional. The virtual ATM works without hardware.');
 
@@ -59,6 +61,14 @@ export default function App() {
     const handle = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(handle);
   }, []);
+
+  useEffect(() => {
+    if (hilTransaction && ['REVOKED', 'MISMATCH'].includes(hilTransaction.phase)) {
+      setHilFaultResetBaseline(previous => previous ?? { ...boardBootEpochs });
+    } else if (!hilTransaction) {
+      setHilFaultResetBaseline(null);
+    }
+  }, [hilTransaction?.phase, boardBootEpochs]);
 
   useEffect(() => {
     if (!hilTransaction || ['RECONCILED', 'DENIED', 'REVOKED', 'MISMATCH'].includes(hilTransaction.phase)) {
@@ -96,6 +106,7 @@ export default function App() {
         setHilTransaction(previous => invalidateInFlightHilTransaction(previous, 'Serial loss or malformed input invalidated board readiness. The active HIL transaction requires reconciliation before continuing.'));
       }
       if (event.kind === 'line' && event.parsed?.type === 'BOARD_BOOT') {
+        setBoardBootEpochs(previous => ({ ...previous, [event.device]: previous[event.device] + 1 }));
         setHilTransaction(previous => invalidateInFlightHilTransaction(previous, 'A board boot/session-start record was observed. Previous readiness and any unresolved transaction are invalidated.'));
       }
       if (event.kind === 'line' && event.parsed?.type === 'ATM_EVENT' && event.parsed.eventName === 'WITHDRAWAL_PENDING') {
@@ -299,7 +310,7 @@ export default function App() {
         {view === 'sentinel' && <SentinelView state={state} boards={boards} />}
         {view === 'experiments' && <ExperimentView state={state} dispatch={dispatch} />}
         {view === 'journal' && <JournalView events={combinedJournalEvents} alerts={alerts} onExport={exportEvidence} />}
-        {view === 'hardware' && <HardwareView ports={ports} chosenPort={chosenPort} setChosenPort={setChosenPort} boards={boards} message={portMessage} serialEvents={serialEvents} refresh={refreshPorts} connect={connectBoard} disconnect={disconnectBoard} sendCommand={sendBoardCommand} hilTransaction={hilTransaction} nowMs={nowMs} clearHilTransaction={() => { setHilTransaction(null); setHilTransactionStartedAt(null); }} />}
+        {view === 'hardware' && <HardwareView ports={ports} chosenPort={chosenPort} setChosenPort={setChosenPort} boards={boards} message={portMessage} serialEvents={serialEvents} refresh={refreshPorts} connect={connectBoard} disconnect={disconnectBoard} sendCommand={sendBoardCommand} hilTransaction={hilTransaction} boardBootEpochs={boardBootEpochs} hilFaultResetBaseline={hilFaultResetBaseline} nowMs={nowMs} clearHilTransaction={() => { setHilTransaction(null); setHilTransactionStartedAt(null); setHilFaultResetBaseline(null); }} />}
         <footer className="status-footer"><span><i /> DOMAIN CORE ACTIVE</span><span>{eventCount.toString().padStart(3,'0')} EVENTS · {alerts.toString().padStart(2,'0')} ALERTS</span><span>FICTIONAL ACCOUNT · VIRTUAL CASH · RESEARCH PROTOTYPE</span></footer>
       </div>
     </main>
@@ -536,13 +547,15 @@ function HILOperatorControls({ pairReady, unoConnected, sendCommand, hilTransact
   </>;
 }
 
-function HardwareView({ ports, chosenPort, setChosenPort, boards, message, serialEvents, refresh, connect, disconnect, sendCommand, hilTransaction, nowMs, clearHilTransaction }: {
+function HardwareView({ ports, chosenPort, setChosenPort, boards, message, serialEvents, refresh, connect, disconnect, sendCommand, hilTransaction, boardBootEpochs, hilFaultResetBaseline, nowMs, clearHilTransaction }: {
   ports: Port[]; chosenPort: Record<DeviceKey, string>;
   setChosenPort: Dispatch<SetStateAction<Record<DeviceKey, string>>>;
   boards: Record<DeviceKey, BoardState>; message: string; serialEvents: string[];
   refresh: () => void; connect: (device: DeviceKey) => void; disconnect: (device: DeviceKey) => void;
   sendCommand: (device: DeviceKey, command: string) => Promise<{ ok: boolean; error?: string; commandName?: string; sensitive?: boolean }>;
   hilTransaction: HilTransaction | null;
+  boardBootEpochs: HilBoardResetEpochs;
+  hilFaultResetBaseline: HilBoardResetEpochs | null;
   nowMs: number;
   clearHilTransaction: () => void;
 }) {
@@ -560,7 +573,7 @@ function HardwareView({ ports, chosenPort, setChosenPort, boards, message, seria
     boards.uno.phase === 'HEALTHY' && boards.sentinel.phase === 'OBSERVING';
   const canClearHilRecord = Boolean(hilTransaction && (
     hilTransaction.phase === 'RECONCILED' || hilTransaction.phase === 'DENIED' ||
-    ((hilTransaction.phase === 'REVOKED' || hilTransaction.phase === 'MISMATCH') && pairReady)
+    canClearHilFaultAfterPairedReset(hilTransaction.phase, pairReady, hilFaultResetBaseline, boardBootEpochs)
   ));
   const runCommand = async (device: DeviceKey) => {
     const command = drafts[device];
@@ -636,7 +649,7 @@ function HardwareView({ ports, chosenPort, setChosenPort, boards, message, seria
         <p className="muted-note">{hilTransaction.message}</p>
         <p className="muted-note">{hilTransaction.phase === 'RECONCILED' ? 'Both relevant board reports have been observed for this transaction. This remains board-reported evidence, not cryptographic attestation; no desktop shadow-cash mutation is performed by this initial bridge.' : 'The desktop does not mark this as a completed HIL withdrawal or change its software-simulation ledger.'}</p>
         <button className="quiet-button" onClick={clearHilTransaction} disabled={!canClearHilRecord}>Clear displayed terminal record</button>
-        {(['REVOKED', 'MISMATCH'].includes(hilTransaction.phase) && !pairReady) && <p className="muted-note">After a paired board reset and successful new readiness sequence, this display can be cleared. Clearing the display alone never clears a board fault.</p>}
+        {(['REVOKED', 'MISMATCH'].includes(hilTransaction.phase) && !canClearHilFaultAfterPairedReset(hilTransaction.phase, pairReady, hilFaultResetBaseline, boardBootEpochs)) && <p className="muted-note">This fault stays latched in the desktop until both boards emit a new boot/session-start record and fresh paired readiness is re-established. Clearing the display alone never clears a board fault.</p>}
       </>}
     </section>
     {commandFeedback && <div className="hardware-notice"><CircleAlert size={16} /><p>{commandFeedback}</p></div>}
