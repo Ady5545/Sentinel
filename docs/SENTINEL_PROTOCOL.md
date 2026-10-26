@@ -1,6 +1,6 @@
-# SENTINEL UNO ↔ ESP32 Protocol Specification — v2
+# SENTINEL UNO ↔ ESP32 Protocol Specification — v3
 
-**Status:** Implemented firmware proposal; build and hardware bench validation required  
+**Status:** V3 handshake implementation; build and hardware bench validation required  
 **UART:** 9600 baud, 8 data bits, no parity, 1 stop bit  
 **USB diagnostics/desktop command link:** 115200 baud  
 **Boards:** one Arduino Uno (ATM-controller demo) + one ESP32 DevKit (guardian demo)
@@ -16,11 +16,11 @@
 
 ## Frame format
 
-    S2|<type>|<session>|<seq>|<payload>|<crc16>\n
+    S3|<type>|<session>|<seq>|<payload>|<crc16>\n
 
 - Fixed ASCII framing, newline required, maximum line length bounded by the firmware parser.
 - CRC-16/CCITT-FALSE, polynomial 0x1021, initial 0xFFFF, no reflection, xorout 0x0000, four hexadecimal digits.
-- Receivers reject malformed field counts, unsupported version, invalid session characters, invalid sequence format, CRC mismatch, overlong frames, stale/duplicate/skipped sequence and unknown message types.
+- Receivers reject malformed field counts, unsupported version, invalid session characters, invalid sequence format, CRC mismatch, overlong frames, unexplained sequence gaps, conflicting duplicates, and unknown message types. Exact startup HELLO/handshake-ACK duplicates are recognized only in the defined negotiation window and do not repeat domain effects.
 - Each direction has its own sequence counter. Reboot establishes a new session; sequence/session tokens are not cryptographic.
 - Frames and payload fields are bounded; no dynamic allocation is based on peer-controlled lengths.
 
@@ -28,8 +28,8 @@
 
 | Direction | Type | Meaning |
 |---|---|---|
-| UNO → ESP32 | HELLO | Starts a new demo session (UNO-ATM-V2) |
-| ESP32 → UNO | HELLO | Announces entry into the observed Uno session; sent once per startup handshake |
+| UNO → ESP32 | HELLO | Starts a new demo session (UNO-ATM-V3, sequence 1) |
+| ESP32 → UNO | HELLO | Announces V3 negotiation (sequence 1); retried identically until controller ACK |
 | UNO → ESP32 | STATE | Reports atm, auth, and committed transaction count |
 | UNO → ESP32 | HEARTBEAT | Reports state and uptime; receiver timestamps receipt locally |
 | UNO → ESP32 | REQUEST | Requests guardian evaluation for one withdrawal, e.g. id=T0000001;amount=500 |
@@ -38,11 +38,24 @@
 | UNO → ESP32 | EVENT | Reports authentication/fixture/transaction evidence |
 | ESP32 → UNO | REVOKE | Latches guardian authority revoked; does not self-clear |
 | ESP32 → UNO | STATUS | Guardian liveness response to a validated UNO HEARTBEAT; no permit |
-| UNO → ESP32 | ACK | Diagnostic protocol observation; never grants authority |
+| UNO ↔ ESP32 | ACK | Exact handshake acknowledgement; never grants transaction authority |
 
-## Half-duplex handshake and liveness scheduling
+## V3 session handshake, retry, and liveness scheduling
 
-The Uno's `SoftwareSerial` link cannot reliably receive while the Uno is transmitting. To avoid startup collisions, the ESP32 responds to the first UNO `HELLO` with exactly one ESP32 `HELLO` frame; it must not send an immediate second startup frame. The Uno then sends its `ACK` and initial `STATE`. The ESP32 sends `STATUS|HEALTHY` only after it has received and validated a UNO `HEARTBEAT`, so the Uno is not transmitting while the guardian replies. Each subsequent valid heartbeat receives one status response; the ESP32 must not send timer-driven status frames independently of the heartbeat. Missing or invalid heartbeats still fail closed.
+The frame prefix is \`S3\`; both board sketches must be flashed as a matched pair. V2 (\`S2\`) frames are rejected. Do not mix one V2 sketch with one V3 sketch.
+
+The handshake is a four-message exchange with fixed sequence identities:
+
+1. UNO sends \`S3|HELLO|<session>|1|UNO-ATM-V3|<crc>\`.
+2. ESP32 accepts only the initial HELLO at sequence 1 for a new session and sends \`HELLO\` at ESP32 sequence 1.
+3. UNO acknowledges with \`ACK|HELLO_ACCEPTED\` at UNO sequence 2 but does **not** publish STATE or HEARTBEAT yet.
+4. ESP32 accepts that ACK, replies with its own \`ACK|HELLO_ACCEPTED\` at ESP32 sequence 2, and considers negotiation complete. The Uno becomes ready only when that final ESP32 ACK is received. The ESP32 still withholds OBSERVING status and all permits until it sees a valid heartbeat.
+
+If the first ESP32 HELLO is missed, the Uno retries the identical HELLO at sequence 1. If the Uno ACK is missed, the ESP32 retries the identical HELLO at sequence 1. If the ESP32 final ACK is missed, the Uno's duplicate HELLO causes the ESP32 to replay its fixed sequence-2 ACK. Retries reuse the original sequence and payload; they never advance a sequence counter. Exact duplicate startup HELLOs and handshake ACKs are idempotent and do not re-apply domain effects. Duplicate exceptions end after startup; a later repeated HELLO remains a protocol fault.
+
+The ESP32 retries its HELLO every 800 ms and latches a local negotiation fault after an 8-second handshake deadline. Until negotiation completes, neither side may issue a PERMIT, and the ESP32 does not transmit a session REVOKE that the Uno cannot reliably correlate. The Uno keeps announcing the same initial HELLO until negotiation completes or its own guardian fault is latched. A clean paired restart is required after a latched failure.
+
+The Uno's \`SoftwareSerial\` link is timing-sensitive, so application-level turn-taking remains important. The ESP32 sends \`STATUS|HEALTHY\` only after a validated UNO heartbeat; it does not emit timer-driven status frames. A missing/invalid heartbeat or protocol timeout still fails closed. CRC detects accidental corruption, not malicious forgery.
 
 ## Guardian policy
 
