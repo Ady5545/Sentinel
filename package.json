@@ -12,10 +12,11 @@
     "build:renderer": "tsc -b && vite build",
     "check:main": "node --check electron/main.cjs && node --check electron/preload.cjs && node --check electron/serial-manager.cjs && node --test electron/serial-manager.node-test.cjs",
     "test": "vitest run src",
-    "build": "npm run check:main && npm test && npm run build:renderer",
+    "build": "npm run check:main && npm test && npm run test:qualification && npm run build:renderer",
     "dist:mac": "npm run build:renderer && electron-builder --mac dmg zip --arm64",
     "dist:win": "npm run build:renderer && electron-builder --win nsis zip --x64",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "electron-builder install-app-deps",
+    "test:qualification": "node --test scripts/release-qualification.test.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^6.1.2",
