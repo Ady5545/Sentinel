@@ -58,7 +58,7 @@ type ParsedSerialKind = 'opened' | 'closed' | 'error' | 'line' | 'command-writte
 
 export type ResearchSessionAction =
   | { type: 'SET_MODE'; mode: ResearchMode; runId: string; at: number }
-  | { type: 'RESTORE_BRIDGE'; mode: ResearchMode; boards: Record<BoardDevice, { connected: boolean; sessionId?: string; phase: string; readinessAt: number }>; hilFaultLatched: boolean; faultResetBaseline: HilBoardEpochs | null; boardBootEpochs: HilBoardEpochs; at: number }
+  | { type: 'RESTORE_BRIDGE'; mode: ResearchMode; runId?: string; boards: Record<BoardDevice, { connected: boolean; sessionId?: string; phase: string; readinessAt: number }>; hilFaultLatched: boolean; faultResetBaseline: HilBoardEpochs | null; boardBootEpochs: HilBoardEpochs; at: number }
   | { type: 'HIL_TIMEOUT'; at: number }
   | { type: 'CLEAR_TRANSACTION'; at: number }
   | {
@@ -290,8 +290,25 @@ export function researchSessionReducer(
       uno: readinessPhase.uno ? action.boards.uno.readinessAt : 0,
       sentinel: readinessPhase.sentinel ? action.boards.sentinel.readinessAt : 0
     };
+    let restored = state;
+    if (action.runId && action.runId !== state.runId) {
+      restored = appendRecord(restored, action.at, 'SYSTEM', 'RUN_ENDED', 'HOST_DERIVED', {
+        runId: state.runId, mode: state.mode,
+        reason: 'The renderer session restarted. Its prior in-memory transaction/shadow ledger was not restored.'
+      });
+      restored = {
+        ...restored, runId: action.runId, mode: action.mode,
+        hilTransaction: null, hilShadow: initialHilShadowState(), lastSimulationEventKey: null
+      };
+      restored = appendRecord(restored, action.at, 'SYSTEM', 'RUN_STARTED', 'HOST_DERIVED', {
+        schemaVersion: restored.schemaVersion, runId: action.runId, mode: action.mode,
+        recovery: true,
+        evidenceLimit: 'Renderer recovery starts a new local run; host-reported serial observations do not restore a prior shadow ledger.'
+      });
+    }
     const next: ResearchSessionState = {
-      ...state, mode: action.mode, boardSessions, readinessPhase, readinessAt,
+      ...restored, mode: action.mode, runId: action.runId || restored.runId,
+      boardSessions, readinessPhase, readinessAt,
       hilFaultLatched: action.hilFaultLatched,
       faultResetBaseline: action.faultResetBaseline,
       boardBootEpochs: { ...action.boardBootEpochs }
@@ -300,7 +317,7 @@ export function researchSessionReducer(
       researchMode: action.mode,
       unoConnected: action.boards.uno.connected, unoPhase: action.boards.uno.phase,
       sentinelConnected: action.boards.sentinel.connected, sentinelPhase: action.boards.sentinel.phase,
-      shadowStatus: state.hilShadow.status,
+      shadowStatus: next.hilShadow.status, hilFaultLatched: action.hilFaultLatched,
       note: 'Readiness snapshot restored from the host. RAM-only HIL shadow is not inferred from USB connection data.'
     });
   }
