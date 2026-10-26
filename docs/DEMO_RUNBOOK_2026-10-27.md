@@ -17,7 +17,7 @@ npm install
 npm run dev
 ```
 
-Keep the Electron window open. If this checkout is in another folder, run the commands from that SENTINEL repository folder. This launches the native desktop app and its local Vite renderer; it is not the GitHub Pages website. The core simulation works offline and does not need either board connected.
+Replace `/path/to/Sentinel` with the actual folder containing the repository. If you need a fresh clone, run `git clone https://github.com/Ady5545/Sentinel.git` first, then enter that folder and check out the branch. Keep the Electron window open. This launches the native desktop app and its local Vite renderer; it is not the GitHub Pages website. The core simulation works offline and does not need either board connected.
 
 ## Main judge sequence (about 2–3 minutes)
 
