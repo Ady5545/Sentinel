@@ -49,3 +49,25 @@ body{padding-bottom:58px}
 .board-command-form{margin-top:14px;padding-top:12px;border-top:1px solid #2a3740}.board-command-form input,.hil-setup-grid input{width:100%;min-width:0;min-height:36px;padding:8px 9px;color:#d6e0e6;background:#121b22;border:1px solid #35434d;border-radius:3px;font:500 9px var(--mono)}.board-command-form input:focus-visible,.hil-setup-grid input:focus-visible{outline:2px solid var(--amber);outline-offset:2px}.board-command-form .muted-note,.hil-operator-panel .muted-note,.hil-transaction-panel .muted-note{font-size:8px;line-height:1.6}.hil-operator-panel,.hil-transaction-panel{margin-top:14px}.hil-setup-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:12px 0}.hil-setup-grid>div{min-width:0}.hil-action-row{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 14px}.hil-action-row .board-button{flex:1 1 150px;margin-top:0}.cash-counts{grid-template-columns:repeat(4,minmax(0,1fr))}.customer-ops{grid-template-columns:repeat(2,minmax(0,1fr))}.danger-command{color:#f3c0b9;background:#432b2d;border-color:#784448}.danger-command:hover:not(:disabled){background:#5a3236}@media(max-width:700px){.hil-setup-grid,.cash-counts,.customer-ops{grid-template-columns:repeat(2,minmax(0,1fr))}.hil-action-row .board-button{flex-basis:100%}}
 
 .divider-line{height:1px;width:100%;background:#2a3740;margin:8px 0 14px}
+
+
+/* Judge-facing guided security sequence */
+.presentation-banner{position:relative;overflow:hidden;margin:0 0 18px;border:1px solid #354a50;border-radius:8px;background:linear-gradient(115deg,#17262a 0%,#1b292f 52%,#20282e 100%);box-shadow:0 14px 35px #00000020}
+.presentation-banner:after{content:"";position:absolute;right:-58px;top:-118px;width:280px;height:280px;border:1px solid #47726835;border-radius:50%;box-shadow:0 0 0 24px #47726812,0 0 0 50px #4772680b;pointer-events:none}
+.presentation-banner-top{position:relative;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 16px;border-bottom:1px solid #35464b;color:#8ca9a4;font:600 8px var(--mono);letter-spacing:1.1px}
+.presentation-live{display:inline-flex;align-items:center;gap:8px;color:#9bd7bc}
+.presentation-live i{width:6px;height:6px;border-radius:50%;background:#8ad5ad;box-shadow:0 0 0 4px #8ad5ad18}
+.presentation-id{color:#81919a}
+.presentation-banner-body{position:relative;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:24px;padding:22px 18px 20px}
+.presentation-copy{max-width:680px}.presentation-eyebrow{margin-bottom:8px;color:#8cbdb0;font:600 8px var(--mono);letter-spacing:1.3px}
+.presentation-copy h2{margin:0 0 8px;color:#f0f5f3;font-size:clamp(19px,2vw,27px);font-weight:650;letter-spacing:-.7px}
+.presentation-copy p{max-width:620px;margin:0;color:#a8b8bd;font-size:11px;line-height:1.75}
+.presentation-steps{display:flex;gap:18px;flex-wrap:wrap;margin-top:17px}
+.presentation-steps span{display:inline-flex;align-items:center;gap:7px;color:#c0d0d0;font-size:9px}
+.presentation-steps b{display:grid;place-items:center;width:19px;height:19px;border:1px solid #49655f;border-radius:50%;color:#a4d9c5;font:600 8px var(--mono)}
+.presentation-launch{position:relative;z-index:1;display:flex;flex:0 0 auto;align-items:center;gap:11px;min-height:58px;padding:11px 14px;border:1px solid #588b79;border-radius:5px;background:#24483d;color:#e8f6ef;text-align:left;transition:background .18s,border-color .18s,transform .18s}
+.presentation-launch:hover{background:#2c5a4b;border-color:#7cb8a2;transform:translateY(-1px)}
+.presentation-launch-icon{display:grid;place-items:center;width:34px;height:34px;border:1px solid #527d6e;border-radius:4px;color:#a8e0c7;background:#31594c}
+.presentation-launch>span:nth-child(2){display:grid;gap:5px}.presentation-launch strong{font-size:10px;font-weight:650;white-space:nowrap}.presentation-launch small{color:#b0cbc0;font-size:8px;white-space:nowrap}.presentation-launch>svg{color:#a6d9c3}
+@media(max-width:900px){.presentation-banner-body{align-items:flex-start;flex-direction:column}.presentation-launch{width:100%;justify-content:flex-start}.presentation-launch>svg{margin-left:auto}}
+@media(max-width:560px){.presentation-banner-top{padding:10px 12px}.presentation-banner-body{padding:17px 12px}.presentation-steps{gap:9px 13px}.presentation-steps span{font-size:8px}.presentation-id{font-size:7px}}
