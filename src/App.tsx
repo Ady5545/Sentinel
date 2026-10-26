@@ -8,13 +8,17 @@ import {
   atmReducer, initialAtmState,
   type AtmAction, type AtmState, type JournalEvent, type Service
 } from './core/atm-engine';
+import { canBeginHilWithdrawal, redactSensitiveSerialText, type HilShadowState, type HilTransaction } from './core/hil-evidence';
+import { createUnoHilAdapter, type UnoCommand } from './core/uno-hil-adapter';
 import {
-  canBeginHilWithdrawal, canClearHilFaultAfterPairedReset, parseKeyValueText, redactSensitiveSerialText, reduceHilTransaction,
-  reduceStructuredHilTransaction, type HilBoardResetEpochs, type HilTransaction
-} from './core/hil-evidence';
+  canRecommissionHilShadow, createInitialResearchSession, replayRunRecords, researchPairReady,
+  researchSessionReducer, RESEARCH_SCENARIO_CATALOG, type ResearchMode
+} from './core/research-session';
 
 type View = 'terminal' | 'machine' | 'sentinel' | 'experiments' | 'journal' | 'hardware';
 type DeviceKey = 'uno' | 'sentinel';
+type BoardCommand = UnoCommand;
+const createResearchRunId = (mode: ResearchMode) => (mode === 'HIL' ? 'HIL' : 'SIM') + '-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).slice(2, 7).toUpperCase();
 type Port = { path: string; manufacturer?: string; vendorId?: string; productId?: string; serialNumber?: string };
 type BoardPhase = 'DISCONNECTED' | 'USB OPEN' | 'BOOTED' | 'NEGOTIATING' | 'HEALTHY' | 'OBSERVING' | 'STALE' | 'REVOKED' | 'ERROR';
 type BoardState = { connected: boolean; path: string; lastLine: string; lastLineAt: number; readinessAt: number; sessionId?: string; phase: BoardPhase; error?: string };
@@ -40,6 +44,8 @@ function invalidateInFlightHilTransaction(current: HilTransaction | null, messag
 
 export default function App() {
   const [state, dispatch] = useReducer(atmReducer, undefined, () => initialAtmState('protected'));
+  const [research, dispatchResearch] = useReducer(researchSessionReducer, undefined, () => createInitialResearchSession(createResearchRunId('SIMULATION'), Date.now()));
+  const hilTransaction = research.hilTransaction;
   const [view, setView] = useState<View>('terminal');
   const [launcherOpen, setLauncherOpen] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
@@ -50,10 +56,7 @@ export default function App() {
   const [boards, setBoards] = useState<Record<DeviceKey, BoardState>>(initialBoards);
   const [runtime, setRuntime] = useState<{ platform: string; version: string; packaged: boolean } | null>(null);
   const [serialEvents, setSerialEvents] = useState<string[]>([]);
-  const [hilTransaction, setHilTransaction] = useState<HilTransaction | null>(null);
-  const [hilTransactionStartedAt, setHilTransactionStartedAt] = useState<number | null>(null);
-  const [boardBootEpochs, setBoardBootEpochs] = useState<HilBoardResetEpochs>({ uno: 0, sentinel: 0 });
-  const [hilFaultResetBaseline, setHilFaultResetBaseline] = useState<HilBoardResetEpochs | null>(null);
+
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [portMessage, setPortMessage] = useState('Board access is optional. The virtual ATM works without hardware.');
 
@@ -63,27 +66,9 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (hilTransaction && ['REVOKED', 'MISMATCH'].includes(hilTransaction.phase)) {
-      setHilFaultResetBaseline(previous => previous ?? { ...boardBootEpochs });
-    } else if (!hilTransaction) {
-      setHilFaultResetBaseline(null);
-    }
-  }, [hilTransaction?.phase, boardBootEpochs]);
-
-  useEffect(() => {
-    if (!hilTransaction || ['RECONCILED', 'DENIED', 'REVOKED', 'MISMATCH'].includes(hilTransaction.phase)) {
-      if (hilTransactionStartedAt !== null) setHilTransactionStartedAt(null);
-      return;
-    }
-    if (hilTransactionStartedAt === null) {
-      setHilTransactionStartedAt(nowMs);
-      return;
-    }
-    if (nowMs - hilTransactionStartedAt >= HIL_RECONCILIATION_TIMEOUT_MS) {
-      setHilTransaction(previous => invalidateInFlightHilTransaction(previous,
-        'HIL reconciliation timed out after 8 seconds. No desktop cash mutation was performed; reset/reconnect and reconcile the boards before another protected run.'));
-    }
-  }, [hilTransaction, hilTransactionStartedAt, nowMs]);
+    if (!research.hilTransaction || ['RECONCILED', 'DENIED', 'REVOKED', 'MISMATCH'].includes(research.hilTransaction.phase)) return;
+    dispatchResearch({ type: 'HIL_TIMEOUT', at: nowMs });
+  }, [nowMs, research.hilTransaction?.phase, research.hilTransaction?.startedAtMs]);
 
   useEffect(() => {
     const api = window.sentinelDesktop;
