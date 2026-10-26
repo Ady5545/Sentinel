@@ -325,11 +325,19 @@ void revoke(const char *reason) {
   if (heartbeatSeen) sendFrame("REVOKE", "POLICY_REVOKE");
 }
 
-void denyRequest(const char *id, const char *reason) {
-  char payload[48];
-  snprintf(payload, sizeof(payload), "id=%s;reason=%s", id, reason);
+void denyRequest(const char *id, uint32_t amount, const char *reason) {
+  char payload[64];
+  const int n = snprintf(payload, sizeof(payload), "id=%s;amount=%lu;reason=%s",
+                         id, (unsigned long)amount, reason);
+  if (n <= 0 || (size_t)n >= sizeof(payload) || deniedTransactions == 0xFFFFFFFFUL) {
+    revoke("DENY payload/counter failure.");
+    return;
+  }
   ++deniedTransactions;
-  sendFrame("DENY", payload);
+  if (!sendFrame("DENY", payload)) {
+    revoke("Unable to transmit correlated DENY.");
+    return;
+  }
   Serial.print(F("[DENY] "));
   Serial.println(payload);
 }
@@ -547,7 +555,7 @@ void handleRequest(const char *payload) {
   }
   lastTransactionNumber = transactionNumber;
   if (amount > maxTransaction) {
-    denyRequest(id, "TX_LIMIT");
+    denyRequest(id, amount, "TX_LIMIT");
     return;
   }
   if ((uint32_t)(millis() - budgetWindowStartedAt) >= budgetWindowMs) {
@@ -555,18 +563,27 @@ void handleRequest(const char *payload) {
     approvedWindowAmount = 0;
   }
   if (approvedWindowAmount > windowLimit || amount > windowLimit - approvedWindowAmount) {
-    denyRequest(id, "WINDOW_LIMIT");
+    denyRequest(id, amount, "WINDOW_LIMIT");
     return;
   }
 
+  if (approvedWindowAmount > windowLimit || amount > windowLimit - approvedWindowAmount) {
+    revoke("Guardian budget accounting overflow or limit inconsistency.");
+    return;
+  }
   approvedWindowAmount += amount;
   strncpy(pendingPermitId, id, sizeof(pendingPermitId) - 1);
   pendingPermitId[sizeof(pendingPermitId) - 1] = '\0';
   pendingPermitAmount = amount;
   pendingPermitStartedAt = millis();
   awaitingCommit = true;
-  char permitPayload[20];
-  snprintf(permitPayload, sizeof(permitPayload), "id=%s", id);
+  char permitPayload[36];
+  const int permitLength = snprintf(permitPayload, sizeof(permitPayload),
+      "id=%s;amount=%lu", id, (unsigned long)amount);
+  if (permitLength <= 0 || (size_t)permitLength >= sizeof(permitPayload)) {
+    revoke("PERMIT payload overflow.");
+    return;
+  }
   if (!sendFrame("PERMIT", permitPayload)) {
     Serial.println(F("[FAULT] PERMIT transmission failed; no successful send is asserted."));
     return;

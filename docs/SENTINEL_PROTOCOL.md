@@ -33,8 +33,8 @@
 | UNO → ESP32 | STATE | Reports atm, auth, and committed transaction count |
 | UNO → ESP32 | HEARTBEAT | Reports state and uptime; receiver timestamps receipt locally; V3.1 allows only one outstanding heartbeat |
 | UNO → ESP32 | REQUEST | Requests guardian evaluation for one withdrawal, e.g. id=T0000001;amount=500 |
-| ESP32 → UNO | PERMIT | One-shot permit correlated to pending transaction ID |
-| ESP32 → UNO | DENY | Policy refusal correlated to transaction ID |
+| ESP32 → UNO | PERMIT | One-shot permit containing exact transaction ID and amount; only that pending transaction may commit |
+| ESP32 → UNO | DENY | Policy refusal containing exact transaction ID, amount, and typed reason |
 | UNO → ESP32 | EVENT | Reports typed authentication/fixture evidence or exact `event=TX_COMMITTED;id=...;amount=...` reconciliation evidence |
 | ESP32 → UNO | REVOKE | Latches guardian authority revoked; does not self-clear |
 | ESP32 → UNO | STATUS | Liveness response carrying `ack_seq=<UNO HEARTBEAT sequence>`; no permit |

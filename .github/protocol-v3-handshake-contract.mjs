@@ -146,6 +146,14 @@ test("HEALTHY STATUS acknowledges the exact outstanding UNO HEARTBEAT sequence",
   assert.match(protocol, /HEALTHY;ack_seq=<UNO heartbeat sequence>/);
 });
 
+test("one-shot decisions bind both the transaction ID and amount", () => {
+  assert.match(esp, /id=%s;amount=%lu/);
+  assert.match(esp, /denyRequest\(id,\s*amount,\s*"TX_LIMIT"\)/);
+  assert.match(esp, /denyRequest\(id,\s*amount,\s*"WINDOW_LIMIT"\)/);
+  assert.match(uno, /payloadIsIdAmount\(payload,\s*txPendingAmount\)/);
+  assert.match(uno, /payloadIsIdAmountReason\(payload,\s*txPendingAmount\)/);
+});
+
 test("commit reconciliation uses an explicit TX_COMMITTED event schema", () => {
   assert.match(uno, /event=TX_COMMITTED;id=%s;amount=%lu/);
   assert.match(esp, /strcmp\(eventName,\s*"TX_COMMITTED"\)\s*==\s*0/);

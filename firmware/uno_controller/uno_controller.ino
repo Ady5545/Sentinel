@@ -477,22 +477,34 @@ bool parseHealthyStatusAck(const char *payload, uint32_t &ackSequence) {
   return parseUnsigned(payload + 16, 0xFFFFFFFFUL, ackSequence) && ackSequence != 0;
 }
 
-bool payloadIsIdOnly(const char *payload) {
-  char id[12];
-  if (!payload || strncmp_P(payload, PSTR("id="), 3) != 0 || strchr(payload, ';')) return false;
-  return parsePayloadField(payload, F("id"), id, sizeof(id)) && strcmp(payload + 3, id) == 0;
-}
-
-bool payloadIsIdReason(const char *payload) {
-  char id[12], reason[20];
+bool payloadIsIdAmount(const char *payload, uint32_t expectedAmount) {
+  char id[12], amountText[12];
   if (!payload || strncmp_P(payload, PSTR("id="), 3) != 0) return false;
   const char *separator = strchr(payload, ';');
-  if (!separator || strncmp_P(separator + 1, PSTR("reason="), 7) != 0 ||
+  if (!separator || strncmp_P(separator + 1, PSTR("amount="), 7) != 0 ||
       strchr(separator + 1, ';')) return false;
+  uint32_t amount = 0;
+  return parsePayloadField(payload, F("id"), id, sizeof(id)) &&
+         strcmp(payload + 3, id) == 0 &&
+         parsePayloadField(payload, F("amount"), amountText, sizeof(amountText)) &&
+         parseUnsigned(amountText, 1000000UL, amount) && amount == expectedAmount;
+}
+
+bool payloadIsIdAmountReason(const char *payload, uint32_t expectedAmount) {
+  char id[12], amountText[12], reason[20];
+  if (!payload || strncmp_P(payload, PSTR("id="), 3) != 0) return false;
+  const char *first = strchr(payload, ';');
+  if (!first || strncmp_P(first + 1, PSTR("amount="), 7) != 0) return false;
+  const char *second = strchr(first + 1, ';');
+  if (!second || strncmp_P(second + 1, PSTR("reason="), 7) != 0 ||
+      strchr(second + 1, ';')) return false;
+  uint32_t amount = 0;
   if (!parsePayloadField(payload, F("id"), id, sizeof(id)) ||
+      strcmp(payload + 3, id) != 0 ||
+      !parsePayloadField(payload, F("amount"), amountText, sizeof(amountText)) ||
+      !parseUnsigned(amountText, 1000000UL, amount) || amount != expectedAmount ||
       !parsePayloadField(payload, F("reason"), reason, sizeof(reason))) return false;
-  return strcmp(payload + 3, id) == 0 &&
-         (strcmp(reason, "TX_LIMIT") == 0 || strcmp(reason, "WINDOW_LIMIT") == 0);
+  return strcmp(reason, "TX_LIMIT") == 0 || strcmp(reason, "WINDOW_LIMIT") == 0;
 }
 
 bool transactionIdMatches(const char *payload) {
@@ -545,6 +557,12 @@ void completeWithdrawal() {
       cashInventory.notes100 < txPendingPlan[2] ||
       cashInventory.notes50 < txPendingPlan[3]) {
     enterGuardianLock(F("Local transaction preconditions changed before authorization."));
+    return;
+  }
+
+  if (txCommittedCount == 0xFFFFFFFFUL ||
+      windowWithdrawn > windowLimit || txPendingAmount > windowLimit - windowWithdrawn) {
+    enterGuardianLock(F("Transaction counter or budget overflow guard triggered before commit."));
     return;
   }
 
@@ -715,7 +733,7 @@ void handleGuardianLine(char *line) {
     Serial.print(F("[STATUS_RX] Accepted HEALTHY seq="));
     Serial.println(seq);
   } else if (STREQ(type, "PERMIT")) {
-    if (!payloadIsIdOnly(payload) || !guardianFresh() || atmState != ATM_WITHDRAW_PENDING ||
+    if (!payloadIsIdAmount(payload, txPendingAmount) || !guardianFresh() || atmState != ATM_WITHDRAW_PENDING ||
         (uint32_t)(millis() - txPendingStartedAt) > transactionDecisionTimeoutMs ||
         !transactionIdMatches(payload)) {
       enterGuardianLock(F("Permit stale or not matched to the pending transaction."));
@@ -723,7 +741,7 @@ void handleGuardianLine(char *line) {
     }
     completeWithdrawal();
   } else if (STREQ(type, "DENY")) {
-    if (!payloadIsIdReason(payload) || atmState != ATM_WITHDRAW_PENDING || !transactionIdMatches(payload)) {
+    if (!payloadIsIdAmountReason(payload, txPendingAmount) || atmState != ATM_WITHDRAW_PENDING || !transactionIdMatches(payload)) {
       enterGuardianLock(F("Denial did not match the pending transaction."));
       return;
     }
@@ -1055,6 +1073,15 @@ void handleWithdraw(const char *amountText) {
     return;
   }
 
+  if (txCounter >= 999999999UL) {
+    enterGuardianLock(F("Transaction identifier space exhausted; clean paired restart required."));
+    return;
+  }
+  if (txCommittedCount == 0xFFFFFFFFUL || windowWithdrawn > windowLimit ||
+      amount > windowLimit - windowWithdrawn) {
+    enterGuardianLock(F("Local transaction counters or policy bounds are inconsistent."));
+    return;
+  }
   txPendingAmount = amount;
   memcpy(txPendingPlan, plan, sizeof(plan));
   snprintf_P(txPendingId, sizeof(txPendingId), PSTR("T%07lu"), (unsigned long)(++txCounter));
