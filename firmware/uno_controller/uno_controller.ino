@@ -28,15 +28,15 @@ static const unsigned long USB_BAUD = 115200;
 static const unsigned long HEARTBEAT_MS = 500;
 static const unsigned long HELLO_RETRY_MS = 1000;
 static const unsigned long GUARDIAN_TIMEOUT_MS = 2600;
-static const unsigned long PIN_ENTRY_TIMEOUT_MS = 30000;
-static const unsigned long SESSION_TIMEOUT_MS = 60000;
-static const unsigned long PIN_LOCKOUT_MS = 60000;
-static const unsigned long BUDGET_WINDOW_MS = 86400000UL;
+static const unsigned long pinEntryTimeoutMs = 30000;
+static const unsigned long sessionTimeoutMs = 60000;
+static const unsigned long pinLockoutMs = 60000;
+static const unsigned long budgetWindowMs = 86400000UL;
 static const uint32_t DEFAULT_MAX_WITHDRAWAL = 20000UL;
 static const uint32_t DEFAULT_WINDOW_LIMIT = 40000UL;
 static const uint8_t MAX_ACCOUNTS = 4;
 static const uint8_t MAX_PIN_LENGTH = 6;
-static const uint8_t MAX_PIN_FAILURES = 3;
+static const uint8_t maxPinFailures = 3;
 static const size_t FRAME_MAX = 120;
 static const size_t USB_LINE_MAX = 96;
 static const uint8_t JOURNAL_SIZE = 8;
@@ -79,9 +79,13 @@ char activeCardId[17] = {0};
 int8_t activeAccount = -1;
 uint32_t maxWithdrawal = DEFAULT_MAX_WITHDRAWAL;
 uint32_t windowLimit = DEFAULT_WINDOW_LIMIT;
+unsigned long budgetWindowMs = DEFAULT_budgetWindowMs;
+unsigned long pinEntryTimeoutMs = DEFAULT_pinEntryTimeoutMs;
+unsigned long sessionTimeoutMs = DEFAULT_sessionTimeoutMs;
+unsigned long pinLockoutMs = DEFAULT_pinLockoutMs;
+uint8_t maxPinFailures = DEFAULT_maxPinFailures;
 uint32_t windowWithdrawn = 0;
 uint32_t budgetWindowStartedAt = 0;
-uint32_t customerSessionStartedAt = 0;
 uint32_t pinEntryStartedAt = 0;
 uint32_t lastCustomerActivityAt = 0;
 uint32_t txCounter = 0;
@@ -107,7 +111,6 @@ uint32_t lastHelloAt = 0;
 bool handshakeComplete = false;
 bool guardianRevokeLatched = false;
 bool statePublished = false;
-uint32_t lastJournalAt = 0;
 char journal[JOURNAL_SIZE][32];
 uint8_t journalNext = 0;
 uint8_t journalCount = 0;
@@ -572,7 +575,7 @@ void printHelp() {
   Serial.println(F("SENTINEL ATM controller commands (fictional/demo data only):"));
   Serial.println(F("  ADD_ACCOUNT <CARD_ID> <4-6_DIGIT_PIN> <START_BALANCE>"));
   Serial.println(F("  SET_CASH <COUNT_500> <COUNT_200> <COUNT_100> <COUNT_50>"));
-  Serial.println(F("  SET_POLICY <MAX_PER_TXN> <WINDOW_LIMIT>"));
+  Serial.println(F("  SET_POLICY <MAX_TXN> <WINDOW_LIMIT> [WINDOW_MS PIN_TRIES LOCKOUT_MS PIN_TIMEOUT_MS SESSION_TIMEOUT_MS]"));
   Serial.println(F("  CARD <CARD_ID> | PIN <PIN> | BALANCE | WITHDRAW <AMOUNT>"));
   Serial.println(F("  CANCEL | LOGOUT | STATUS | JOURNAL | HELP | FIXTURE_MISMATCH"));
   Serial.println(F("Accounts/PINs/cash are RAM-only and are erased on reset."));
@@ -629,19 +632,39 @@ void handleSetCash(char *c500, char *c200, char *c100, char *c50) {
   emitEvent(F("CASH_CONFIGURED"), F("currency=INR;values=500,200,100,50"));
 }
 
-void handleSetPolicy(char *maxText, char *windowText) {
-  uint32_t newMax, newWindow;
-  if (activeAccount >= 0 || atmState == ATM_WITHDRAW_PENDING ||
-      !parseUnsigned(maxText, 1000000UL, newMax) ||
-      !parseUnsigned(windowText, 1000000UL, newWindow) ||
+void handleSetPolicy(char **argv, uint8_t argc) {
+  uint32_t newMax = 0, newWindow = 0;
+  uint32_t newWindowMs = budgetWindowMs, newTries = maxPinFailures;
+  uint32_t newLockoutMs = pinLockoutMs, newPinTimeoutMs = pinEntryTimeoutMs;
+  uint32_t newSessionTimeoutMs = sessionTimeoutMs;
+  const bool fullPolicy = argc == 8;
+  if ((argc != 3 && !fullPolicy) || activeAccount >= 0 || atmState == ATM_WITHDRAW_PENDING ||
+      !parseUnsigned(argv[1], 1000000UL, newMax) ||
+      !parseUnsigned(argv[2], 1000000UL, newWindow) ||
       newMax == 0 || newWindow < newMax) {
     emitEvent(F("CONFIG_DENIED"), F("reason=invalid_policy_or_active_session"));
+    return;
+  }
+  if (fullPolicy &&
+      (!parseUnsigned(argv[3], 86400000UL, newWindowMs) || newWindowMs < 60000UL ||
+       !parseUnsigned(argv[4], 10UL, newTries) || newTries < 1 ||
+       !parseUnsigned(argv[5], 900000UL, newLockoutMs) || newLockoutMs < 5000UL ||
+       !parseUnsigned(argv[6], 120000UL, newPinTimeoutMs) || newPinTimeoutMs < 5000UL ||
+       !parseUnsigned(argv[7], 600000UL, newSessionTimeoutMs) || newSessionTimeoutMs < 10000UL)) {
+    emitEvent(F("CONFIG_DENIED"), F("reason=policy_value_out_of_safe_range"));
     return;
   }
   maxWithdrawal = newMax;
   windowLimit = newWindow;
   windowWithdrawn = 0;
   budgetWindowStartedAt = millis();
+  if (fullPolicy) {
+    budgetWindowMs = newWindowMs;
+    maxPinFailures = (uint8_t)newTries;
+    pinLockoutMs = newLockoutMs;
+    pinEntryTimeoutMs = newPinTimeoutMs;
+    sessionTimeoutMs = newSessionTimeoutMs;
+  }
   emitEvent(F("POLICY_CONFIGURED"), F("window=uptime_based_demo_window"));
 }
 
@@ -679,7 +702,10 @@ void handleCard(const char *card) {
   pinEntryStartedAt = millis();
   lastCustomerActivityAt = millis();
   setAtmState(ATM_PIN_PENDING);
-  emitEvent(F("PIN_REQUIRED"), F("tries=3;timeout_ms=30000"));
+  char details[40];
+  snprintf_P(details, sizeof(details), PSTR("tries=%u;timeout_ms=%lu"),
+             (unsigned)maxPinFailures, pinEntryTimeoutMs);
+  emitEvent(F("PIN_REQUIRED"), details);
   sendFrame(F("EVENT"), F("source=BOARD_REPORTED;event=CARD_ACCEPTED"));
 }
 
@@ -688,7 +714,7 @@ void handlePin(char *pin) {
     emitEvent(F("PIN_REJECTED"), F("reason=no_card_waiting"));
     return;
   }
-  if ((uint32_t)(millis() - pinEntryStartedAt) > PIN_ENTRY_TIMEOUT_MS) {
+  if ((uint32_t)(millis() - pinEntryStartedAt) > pinEntryTimeoutMs) {
     emitEvent(F("PIN_REJECTED"), F("reason=entry_timeout"));
     resetCustomerSession();
     return;
@@ -697,21 +723,22 @@ void handlePin(char *pin) {
   if (!validPin(pin) || !pinEqualsConstantWork(pin, a.pin)) {
     ++a.failedPins;
     char details[32];
-    snprintf_P(details, sizeof(details), PSTR("remaining=%u"), (unsigned)(MAX_PIN_FAILURES - (a.failedPins < MAX_PIN_FAILURES ? a.failedPins : MAX_PIN_FAILURES)));
+    snprintf_P(details, sizeof(details), PSTR("remaining=%u"), (unsigned)(maxPinFailures - (a.failedPins < maxPinFailures ? a.failedPins : maxPinFailures)));
     emitEvent(F("PIN_FAILED"), details);
     char eventPayload[48];
     snprintf_P(eventPayload, sizeof(eventPayload), PSTR("source=BOARD_REPORTED;event=PIN_FAIL;count=%u"), (unsigned)a.failedPins);
     sendFrame(F("EVENT"), eventPayload);
-    if (a.failedPins >= MAX_PIN_FAILURES) {
-      a.lockoutUntil = millis() + PIN_LOCKOUT_MS;
-      emitEvent(F("CARD_LOCKED"), F("duration_ms=60000"));
+    if (a.failedPins >= maxPinFailures) {
+      a.lockoutUntil = millis() + pinLockoutMs;
+      char lockDetails[28];
+      snprintf_P(lockDetails, sizeof(lockDetails), PSTR("duration_ms=%lu"), pinLockoutMs);
+      emitEvent(F("CARD_LOCKED"), lockDetails);
       resetCustomerSession();
       setAtmState(ATM_LOCKED);
     }
     return;
   }
   a.failedPins = 0;
-  customerSessionStartedAt = millis();
   lastCustomerActivityAt = millis();
   char details[32];
   snprintf_P(details, sizeof(details), PSTR("card=%s"), a.cardId);
@@ -757,7 +784,7 @@ void handleWithdraw(const char *amountText) {
     emitEvent(F("WITHDRAWAL_DENIED"), F("reason=insufficient_balance"));
     return;
   }
-  if ((uint32_t)(millis() - budgetWindowStartedAt) >= BUDGET_WINDOW_MS) {
+  if ((uint32_t)(millis() - budgetWindowStartedAt) >= budgetWindowMs) {
     budgetWindowStartedAt = millis();
     windowWithdrawn = 0;
   }
@@ -794,11 +821,11 @@ void handleCommand(char *line) {
   work[sizeof(work) - 1] = '\0';
   for (size_t i = 0; work[i]; ++i) work[i] = (char)toupper((unsigned char)work[i]);
 
-  char *argv[7] = {0};
+  char *argv[8] = {0};
   uint8_t argc = 0;
   char *save = NULL;
   char *token = strtok_r(work, " \t", &save);
-  while (token && argc < 7) {
+  while (token && argc < 8) {
     argv[argc++] = token;
     token = strtok_r(NULL, " \t", &save);
   }
@@ -824,8 +851,8 @@ void handleCommand(char *line) {
     handleAddAccount(argv[1], argv[2], argv[3]);
   } else if (STREQ(argv[0], "SET_CASH") && argc == 5) {
     handleSetCash(argv[1], argv[2], argv[3], argv[4]);
-  } else if (STREQ(argv[0], "SET_POLICY") && argc == 3) {
-    handleSetPolicy(argv[1], argv[2]);
+  } else if (STREQ(argv[0], "SET_POLICY") && (argc == 3 || argc == 8)) {
+    handleSetPolicy(argv, argc);
   } else if (STREQ(argv[0], "CARD") && argc == 2) {
     handleCard(argv[1]);
   } else if (STREQ(argv[0], "PIN") && argc == 2) {
@@ -918,12 +945,12 @@ void loop() {
   }
 
   if (atmState == ATM_PIN_PENDING &&
-      (uint32_t)(now - pinEntryStartedAt) > PIN_ENTRY_TIMEOUT_MS) {
+      (uint32_t)(now - pinEntryStartedAt) > pinEntryTimeoutMs) {
     emitEvent(F("PIN_TIMEOUT"), F("reason=entry_timeout"));
     resetCustomerSession();
   }
   if (atmState == ATM_AUTHENTICATED &&
-      (uint32_t)(now - lastCustomerActivityAt) > SESSION_TIMEOUT_MS) {
+      (uint32_t)(now - lastCustomerActivityAt) > sessionTimeoutMs) {
     emitEvent(F("SESSION_TIMEOUT"), F("reason=idle_timeout"));
     resetCustomerSession();
   }
