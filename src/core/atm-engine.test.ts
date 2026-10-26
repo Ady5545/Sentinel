@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assessControllerEvidence, atmReducer, initialAtmState, type ControllerEvidence } from './atm-engine';
+import { assessControllerEvidence, atmReducer, initialAtmState, type AtmState, type ControllerEvidence } from './atm-engine';
 
 const healthy: ControllerEvidence = {
   expectedProfile: 'UNO-LAB-01', reportedProfile: 'UNO-LAB-01',
@@ -105,7 +105,7 @@ describe('ATM customer state machine', () => {
   });
 
   it('keeps the intentionally unprotected dispense only in baseline simulation', () => {
-    let state = {
+    let state: AtmState = {
       ...initialAtmState('baseline'), screen: 'pending' as const, authenticated: true, service: 'withdrawal' as const,
       pendingWithdrawal: { id: 'BASE-1', amount: 2000, requestedAtMs: 1 }
     };
@@ -115,7 +115,8 @@ describe('ATM customer state machine', () => {
     state = atmReducer(state, { type: 'COMMIT_PENDING_WITHDRAWAL', nowMs: 3 });
     expect(state.cassetteCash).toBe(48000);
     expect(state.dispensedTotal).toBe(2000);
-  });});
+  });
+});
 
 describe('virtual dispenser authority boundary', () => {
   it('blocks the controlled compromise fixture in protected mode', () => {
