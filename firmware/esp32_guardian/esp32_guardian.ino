@@ -530,7 +530,11 @@ void handleEvent(const char *payload, uint32_t frameSequence) {
     Serial.print(F("[COMMIT_ACK_TX] ACK sequence="));
     Serial.print(lastCommitAckSequence);
     Serial.print(F(" acknowledges UNO EVENT sequence="));
-    Serial.println(lastCommittedEventSequence);
+    Serial.print(lastCommittedEventSequence);
+    Serial.print(F("; id="));
+    Serial.print(id);
+    Serial.print(F("; amount="));
+    Serial.println(amount);
     return;
   }
 
