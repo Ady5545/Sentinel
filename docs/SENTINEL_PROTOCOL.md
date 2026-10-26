@@ -29,7 +29,7 @@
 | Direction | Type | Meaning |
 |---|---|---|
 | UNO → ESP32 | HELLO | Starts a new demo session (UNO-ATM-V2) |
-| ESP32 → UNO | HELLO, ACK | Acknowledges protocol/session observation; no permit |
+| ESP32 → UNO | HELLO | Announces entry into the observed Uno session; sent once per startup handshake |
 | UNO → ESP32 | STATE | Reports atm, auth, and committed transaction count |
 | UNO → ESP32 | HEARTBEAT | Reports state and uptime; receiver timestamps receipt locally |
 | UNO → ESP32 | REQUEST | Requests guardian evaluation for one withdrawal, e.g. id=T0000001;amount=500 |
@@ -37,8 +37,12 @@
 | ESP32 → UNO | DENY | Policy refusal correlated to transaction ID |
 | UNO → ESP32 | EVENT | Reports authentication/fixture/transaction evidence |
 | ESP32 → UNO | REVOKE | Latches guardian authority revoked; does not self-clear |
-| ESP32 → UNO | STATUS | Guardian liveness/state observation only |
+| ESP32 → UNO | STATUS | Guardian liveness response to a validated UNO HEARTBEAT; no permit |
 | UNO → ESP32 | ACK | Diagnostic protocol observation; never grants authority |
+
+## Half-duplex handshake and liveness scheduling
+
+The Uno's `SoftwareSerial` link cannot reliably receive while the Uno is transmitting. To avoid startup collisions, the ESP32 responds to the first UNO `HELLO` with exactly one ESP32 `HELLO` frame; it must not send an immediate second startup frame. The Uno then sends its `ACK` and initial `STATE`. The ESP32 sends `STATUS|HEALTHY` only after it has received and validated a UNO `HEARTBEAT`, so the Uno is not transmitting while the guardian replies. Each subsequent valid heartbeat receives one status response; the ESP32 must not send timer-driven status frames independently of the heartbeat. Missing or invalid heartbeats still fail closed.
 
 ## Guardian policy
 
