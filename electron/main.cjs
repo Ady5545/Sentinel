@@ -5,6 +5,7 @@ const { SerialManager } = require('./serial-manager.cjs');
 
 const serialManager = new SerialManager();
 let mainWindow = null;
+let hasLoadedRenderer = false;
 app.setAppUserModelId('org.sentinel.research-environment');
 
 function assertTrustedSender(event) {
@@ -22,6 +23,10 @@ function createWindow() {
     }
   });
   mainWindow.once('ready-to-show', () => mainWindow && mainWindow.show());
+  mainWindow.webContents.on('did-finish-load', () => {
+    if (hasLoadedRenderer) serialManager.rendererReloaded();
+    hasLoadedRenderer = true;
+  });
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   mainWindow.webContents.on('did-fail-load', (_event, code, description, validatedURL, isMainFrame) => {
     if (isMainFrame) console.error('[SENTINEL] Renderer failed to load:', { code, description, validatedURL });
