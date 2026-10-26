@@ -27,16 +27,17 @@ static const unsigned long PEER_BAUD = 9600;
 static const unsigned long USB_BAUD = 115200;
 static const unsigned long HEARTBEAT_MS = 500;
 static const unsigned long HELLO_RETRY_MS = 1000;
-static const unsigned long GUARDIAN_TIMEOUT_MS = 2600;
-static const unsigned long PIN_ENTRY_TIMEOUT_MS = 30000;
-static const unsigned long SESSION_TIMEOUT_MS = 60000;
-static const unsigned long PIN_LOCKOUT_MS = 60000;
-static const unsigned long BUDGET_WINDOW_MS = 86400000UL;
+static const unsigned long DEFAULT_GUARDIAN_TIMEOUT_MS = 2600UL;
+static const unsigned long DEFAULT_TRANSACTION_DECISION_TIMEOUT_MS = 1800UL;
+static const unsigned long DEFAULT_PIN_ENTRY_TIMEOUT_MS = 30000UL;
+static const unsigned long DEFAULT_SESSION_TIMEOUT_MS = 60000UL;
+static const unsigned long DEFAULT_PIN_LOCKOUT_MS = 60000UL;
+static const unsigned long DEFAULT_BUDGET_WINDOW_MS = 86400000UL;
 static const uint32_t DEFAULT_MAX_WITHDRAWAL = 20000UL;
 static const uint32_t DEFAULT_WINDOW_LIMIT = 40000UL;
 static const uint8_t MAX_ACCOUNTS = 4;
 static const uint8_t MAX_PIN_LENGTH = 6;
-static const uint8_t MAX_PIN_FAILURES = 3;
+static const uint8_t DEFAULT_MAX_PIN_FAILURES = 3;
 static const size_t FRAME_MAX = 120;
 static const size_t USB_LINE_MAX = 96;
 static const uint8_t JOURNAL_SIZE = 8;
@@ -79,9 +80,15 @@ char activeCardId[17] = {0};
 int8_t activeAccount = -1;
 uint32_t maxWithdrawal = DEFAULT_MAX_WITHDRAWAL;
 uint32_t windowLimit = DEFAULT_WINDOW_LIMIT;
+unsigned long budgetWindowMs = DEFAULT_BUDGET_WINDOW_MS;
+unsigned long guardianTimeoutMs = DEFAULT_GUARDIAN_TIMEOUT_MS;
+unsigned long transactionDecisionTimeoutMs = DEFAULT_TRANSACTION_DECISION_TIMEOUT_MS;
+unsigned long pinEntryTimeoutMs = DEFAULT_PIN_ENTRY_TIMEOUT_MS;
+unsigned long sessionTimeoutMs = DEFAULT_SESSION_TIMEOUT_MS;
+unsigned long pinLockoutMs = DEFAULT_PIN_LOCKOUT_MS;
+uint8_t maxPinFailures = DEFAULT_MAX_PIN_FAILURES;
 uint32_t windowWithdrawn = 0;
 uint32_t budgetWindowStartedAt = 0;
-uint32_t customerSessionStartedAt = 0;
 uint32_t pinEntryStartedAt = 0;
 uint32_t lastCustomerActivityAt = 0;
 uint32_t txCounter = 0;
@@ -102,12 +109,12 @@ bool droppingUsbLine = false;
 uint32_t txSequence = 0;
 uint32_t lastGuardianSequence = 0;
 uint32_t lastGuardianFrameAt = 0;
+uint32_t lastGuardianStatusAt = 0;
 uint32_t lastHeartbeatAt = 0;
 uint32_t lastHelloAt = 0;
 bool handshakeComplete = false;
 bool guardianRevokeLatched = false;
 bool statePublished = false;
-uint32_t lastJournalAt = 0;
 char journal[JOURNAL_SIZE][32];
 uint8_t journalNext = 0;
 uint8_t journalCount = 0;
@@ -226,6 +233,11 @@ bool parseFrame(char *line, char fields[5][48], uint32_t &seqOut) {
   if (len < 12 || len > FRAME_MAX - 2) return false;
   char *lastSep = strrchr(line, '|');
   if (!lastSep || strlen(lastSep + 1) != 4) return false;
+  for (const char *digit = lastSep + 1; *digit; ++digit) {
+    if (!((*digit >= '0' && *digit <= '9') ||
+          (*digit >= 'A' && *digit <= 'F') ||
+          (*digit >= 'a' && *digit <= 'f'))) return false;
+  }
   char *end = NULL;
   const unsigned long receivedCrc = strtoul(lastSep + 1, &end, 16);
   if (!end || *end != '\0' || receivedCrc > 0xFFFF) return false;
@@ -255,7 +267,8 @@ bool parseUnsigned(const char *text, uint32_t maximum, uint32_t &value) {
   for (size_t i = 0; text[i]; ++i) {
     if (text[i] < '0' || text[i] > '9') return false;
     const uint8_t digit = (uint8_t)(text[i] - '0');
-    if (result > (maximum - digit) / 10UL) return false;
+    if (result > maximum / 10UL ||
+        (result == maximum / 10UL && digit > maximum % 10UL)) return false;
     result = result * 10UL + digit;
   }
   if (result > maximum) return false;
@@ -314,8 +327,8 @@ bool hasConfiguredAccount() {
 bool guardianFresh() {
   return handshakeComplete && !guardianRevokeLatched &&
          guardianLink == LINK_OBSERVING &&
-         lastGuardianFrameAt != 0 &&
-         (uint32_t)(millis() - lastGuardianFrameAt) <= GUARDIAN_TIMEOUT_MS;
+         lastGuardianStatusAt != 0 &&
+         (uint32_t)(millis() - lastGuardianStatusAt) <= guardianTimeoutMs;
 }
 
 void sendState() {
@@ -405,26 +418,25 @@ bool makeNotePlan(uint32_t amount, uint16_t plan[4]) {
                              (uint32_t)cashInventory.notes50 * 50UL;
   if (available < amount) return false;
 
-  const int max500 = (int)((amount / 500UL < cashInventory.notes500) ?
-                           amount / 500UL : cashInventory.notes500);
-  for (int n500 = max500; n500 >= 0; --n500) {
-    uint32_t rem500 = amount - (uint32_t)n500 * 500UL;
-    const int max200 = (int)((rem500 / 200UL < cashInventory.notes200) ?
-                             rem500 / 200UL : cashInventory.notes200);
-    for (int n200 = max200; n200 >= 0; --n200) {
-      uint32_t rem200 = rem500 - (uint32_t)n200 * 200UL;
-      const int max100 = (int)((rem200 / 100UL < cashInventory.notes100) ?
-                               rem200 / 100UL : cashInventory.notes100);
-      for (int n100 = max100; n100 >= 0; --n100) {
-        const uint32_t rem100 = rem200 - (uint32_t)n100 * 100UL;
-        if (rem100 % 50UL != 0 || rem100 / 50UL > cashInventory.notes50) continue;
-        plan[0] = (uint16_t)n500;
-        plan[1] = (uint16_t)n200;
-        plan[2] = (uint16_t)n100;
-        plan[3] = (uint16_t)(rem100 / 50UL);
-        return true;
-      }
-    }
+  // Search only the possible count of the largest denomination. For each
+  // candidate, greedy selection across the remaining nested denominations is
+  // complete for this 500/200/100/50 note set and bounded on an Uno.
+  const uint32_t max500 = (amount / 500UL < cashInventory.notes500) ?
+                          amount / 500UL : cashInventory.notes500;
+  for (int32_t n500 = (int32_t)max500; n500 >= 0; --n500) {
+    uint32_t remaining = amount - (uint32_t)n500 * 500UL;
+    const uint32_t n200 = (remaining / 200UL < cashInventory.notes200) ?
+                          remaining / 200UL : cashInventory.notes200;
+    remaining -= n200 * 200UL;
+    const uint32_t n100 = (remaining / 100UL < cashInventory.notes100) ?
+                          remaining / 100UL : cashInventory.notes100;
+    remaining -= n100 * 100UL;
+    if (remaining % 50UL != 0 || remaining / 50UL > cashInventory.notes50) continue;
+    plan[0] = (uint16_t)n500;
+    plan[1] = (uint16_t)n200;
+    plan[2] = (uint16_t)n100;
+    plan[3] = (uint16_t)(remaining / 50UL);
+    return true;
   }
   return false;
 }
@@ -491,12 +503,16 @@ void handleGuardianLine(char *line) {
   const char *payload = fields[4];
 
   if (STREQ(type, "HELLO")) {
+    if (handshakeComplete) {
+      enterGuardianLock(F("Repeated guardian HELLO inside an established session."));
+      return;
+    }
     if (!STRNEQ(payload, "ESP32-SENTINEL-V2", 17)) {
       enterGuardianLock(F("Unexpected guardian protocol identity."));
       return;
     }
     handshakeComplete = true;
-    if (!guardianRevokeLatched) guardianLink = LINK_OBSERVING;
+    if (!guardianRevokeLatched) guardianLink = LINK_UNKNOWN;
     Serial.println(F("[LINK] V2 guardian handshake observed (identity is self-reported)."));
     sendFrame(F("ACK"), F("HELLO_ACCEPTED"));
     if (!statePublished) sendState();
@@ -507,10 +523,17 @@ void handleGuardianLine(char *line) {
     }
   } else if (STREQ(type, "STATUS")) {
     if (guardianRevokeLatched) return;
+    if (!STREQ(payload, "HEALTHY")) {
+      enterGuardianLock(F("Malformed or non-healthy guardian status."));
+      return;
+    }
+    lastGuardianStatusAt = millis();
     guardianLink = LINK_OBSERVING;
   } else if (STREQ(type, "PERMIT")) {
-    if (!guardianFresh() || atmState != ATM_WITHDRAW_PENDING || !transactionIdMatches(payload)) {
-      enterGuardianLock(F("Permit missing freshness or did not match the pending transaction."));
+    if (!guardianFresh() || atmState != ATM_WITHDRAW_PENDING ||
+        (uint32_t)(millis() - txPendingStartedAt) > transactionDecisionTimeoutMs ||
+        !transactionIdMatches(payload)) {
+      enterGuardianLock(F("Permit stale or not matched to the pending transaction."));
       return;
     }
     completeWithdrawal();
@@ -572,8 +595,8 @@ void printHelp() {
   Serial.println(F("SENTINEL ATM controller commands (fictional/demo data only):"));
   Serial.println(F("  ADD_ACCOUNT <CARD_ID> <4-6_DIGIT_PIN> <START_BALANCE>"));
   Serial.println(F("  SET_CASH <COUNT_500> <COUNT_200> <COUNT_100> <COUNT_50>"));
-  Serial.println(F("  SET_POLICY <MAX_PER_TXN> <WINDOW_LIMIT>"));
-  Serial.println(F("  CARD <CARD_ID> | PIN <PIN> | BALANCE | WITHDRAW <AMOUNT>"));
+  Serial.println(F("  SET_POLICY <MAX_TXN> <WINDOW_LIMIT> [WINDOW_MS PIN_TRIES LOCKOUT_MS PIN_TIMEOUT_MS SESSION_TIMEOUT_MS GUARDIAN_TIMEOUT_MS TX_TIMEOUT_MS]"));
+  Serial.println(F("  CARD <CARD_ID> | PIN <PIN> | BALANCE | WITHDRAW <AMOUNT> | CHANGE_PIN <CURRENT> <NEW> <CONFIRM>"));
   Serial.println(F("  CANCEL | LOGOUT | STATUS | JOURNAL | HELP | FIXTURE_MISMATCH"));
   Serial.println(F("Accounts/PINs/cash are RAM-only and are erased on reset."));
 }
@@ -629,19 +652,45 @@ void handleSetCash(char *c500, char *c200, char *c100, char *c50) {
   emitEvent(F("CASH_CONFIGURED"), F("currency=INR;values=500,200,100,50"));
 }
 
-void handleSetPolicy(char *maxText, char *windowText) {
-  uint32_t newMax, newWindow;
-  if (activeAccount >= 0 || atmState == ATM_WITHDRAW_PENDING ||
-      !parseUnsigned(maxText, 1000000UL, newMax) ||
-      !parseUnsigned(windowText, 1000000UL, newWindow) ||
+void handleSetPolicy(char **argv, uint8_t argc) {
+  uint32_t newMax = 0, newWindow = 0;
+  uint32_t newWindowMs = budgetWindowMs, newTries = maxPinFailures;
+  uint32_t newLockoutMs = pinLockoutMs, newPinTimeoutMs = pinEntryTimeoutMs;
+  uint32_t newSessionTimeoutMs = sessionTimeoutMs;
+  uint32_t newGuardianTimeoutMs = guardianTimeoutMs;
+  uint32_t newTransactionTimeoutMs = transactionDecisionTimeoutMs;
+  const bool fullPolicy = argc == 10;
+  if ((argc != 3 && !fullPolicy) || activeAccount >= 0 || atmState == ATM_WITHDRAW_PENDING ||
+      !parseUnsigned(argv[1], 1000000UL, newMax) ||
+      !parseUnsigned(argv[2], 1000000UL, newWindow) ||
       newMax == 0 || newWindow < newMax) {
     emitEvent(F("CONFIG_DENIED"), F("reason=invalid_policy_or_active_session"));
+    return;
+  }
+  if (fullPolicy &&
+      (!parseUnsigned(argv[3], 86400000UL, newWindowMs) || newWindowMs < 60000UL ||
+       !parseUnsigned(argv[4], 10UL, newTries) || newTries < 1 ||
+       !parseUnsigned(argv[5], 900000UL, newLockoutMs) || newLockoutMs < 5000UL ||
+       !parseUnsigned(argv[6], 120000UL, newPinTimeoutMs) || newPinTimeoutMs < 5000UL ||
+       !parseUnsigned(argv[7], 600000UL, newSessionTimeoutMs) || newSessionTimeoutMs < 10000UL ||
+       !parseUnsigned(argv[8], 30000UL, newGuardianTimeoutMs) || newGuardianTimeoutMs < 1800UL ||
+       !parseUnsigned(argv[9], 10000UL, newTransactionTimeoutMs) || newTransactionTimeoutMs < 500UL)) {
+    emitEvent(F("CONFIG_DENIED"), F("reason=policy_value_out_of_safe_range"));
     return;
   }
   maxWithdrawal = newMax;
   windowLimit = newWindow;
   windowWithdrawn = 0;
   budgetWindowStartedAt = millis();
+  if (fullPolicy) {
+    budgetWindowMs = newWindowMs;
+    maxPinFailures = (uint8_t)newTries;
+    pinLockoutMs = newLockoutMs;
+    pinEntryTimeoutMs = newPinTimeoutMs;
+    sessionTimeoutMs = newSessionTimeoutMs;
+    guardianTimeoutMs = newGuardianTimeoutMs;
+    transactionDecisionTimeoutMs = newTransactionTimeoutMs;
+  }
   emitEvent(F("POLICY_CONFIGURED"), F("window=uptime_based_demo_window"));
 }
 
@@ -679,8 +728,30 @@ void handleCard(const char *card) {
   pinEntryStartedAt = millis();
   lastCustomerActivityAt = millis();
   setAtmState(ATM_PIN_PENDING);
-  emitEvent(F("PIN_REQUIRED"), F("tries=3;timeout_ms=30000"));
+  char details[40];
+  snprintf_P(details, sizeof(details), PSTR("tries=%u;timeout_ms=%lu"),
+             (unsigned)maxPinFailures, pinEntryTimeoutMs);
+  emitEvent(F("PIN_REQUIRED"), details);
   sendFrame(F("EVENT"), F("source=BOARD_REPORTED;event=CARD_ACCEPTED"));
+}
+
+void recordPinFailure(Account &a) {
+  if (a.failedPins < 255) ++a.failedPins;
+  char details[32];
+  const uint8_t remaining = a.failedPins >= maxPinFailures ? 0 : (uint8_t)(maxPinFailures - a.failedPins);
+  snprintf_P(details, sizeof(details), PSTR("remaining=%u"), (unsigned)remaining);
+  emitEvent(F("PIN_FAILED"), details);
+  char eventPayload[48];
+  snprintf_P(eventPayload, sizeof(eventPayload), PSTR("source=BOARD_REPORTED;event=PIN_FAIL;count=%u"), (unsigned)a.failedPins);
+  sendFrame(F("EVENT"), eventPayload);
+  if (a.failedPins >= maxPinFailures) {
+    a.lockoutUntil = millis() + pinLockoutMs;
+    char lockDetails[28];
+    snprintf_P(lockDetails, sizeof(lockDetails), PSTR("duration_ms=%lu"), pinLockoutMs);
+    emitEvent(F("CARD_LOCKED"), lockDetails);
+    resetCustomerSession();
+    setAtmState(ATM_LOCKED);
+  }
 }
 
 void handlePin(char *pin) {
@@ -688,36 +759,46 @@ void handlePin(char *pin) {
     emitEvent(F("PIN_REJECTED"), F("reason=no_card_waiting"));
     return;
   }
-  if ((uint32_t)(millis() - pinEntryStartedAt) > PIN_ENTRY_TIMEOUT_MS) {
+  if ((uint32_t)(millis() - pinEntryStartedAt) > pinEntryTimeoutMs) {
     emitEvent(F("PIN_REJECTED"), F("reason=entry_timeout"));
     resetCustomerSession();
     return;
   }
   Account &a = accounts[(uint8_t)activeAccount];
   if (!validPin(pin) || !pinEqualsConstantWork(pin, a.pin)) {
-    ++a.failedPins;
-    char details[32];
-    snprintf_P(details, sizeof(details), PSTR("remaining=%u"), (unsigned)(MAX_PIN_FAILURES - (a.failedPins < MAX_PIN_FAILURES ? a.failedPins : MAX_PIN_FAILURES)));
-    emitEvent(F("PIN_FAILED"), details);
-    char eventPayload[48];
-    snprintf_P(eventPayload, sizeof(eventPayload), PSTR("source=BOARD_REPORTED;event=PIN_FAIL;count=%u"), (unsigned)a.failedPins);
-    sendFrame(F("EVENT"), eventPayload);
-    if (a.failedPins >= MAX_PIN_FAILURES) {
-      a.lockoutUntil = millis() + PIN_LOCKOUT_MS;
-      emitEvent(F("CARD_LOCKED"), F("duration_ms=60000"));
-      resetCustomerSession();
-      setAtmState(ATM_LOCKED);
-    }
+    recordPinFailure(a);
     return;
   }
   a.failedPins = 0;
-  customerSessionStartedAt = millis();
   lastCustomerActivityAt = millis();
   char details[32];
   snprintf_P(details, sizeof(details), PSTR("card=%s"), a.cardId);
   emitEvent(F("AUTHENTICATED"), details);
   sendFrame(F("EVENT"), F("source=BOARD_REPORTED;event=PIN_OK"));
   setAtmState(ATM_AUTHENTICATED);
+}
+
+void handleChangePin(char *currentPin, char *newPin, char *confirmation) {
+  if (atmState != ATM_AUTHENTICATED || activeAccount < 0 || !guardianFresh()) {
+    emitEvent(F("PIN_CHANGE_DENIED"), F("reason=not_authenticated_or_guardian"));
+    return;
+  }
+  Account &a = accounts[(uint8_t)activeAccount];
+  if (!validPin(currentPin) || !pinEqualsConstantWork(currentPin, a.pin)) {
+    recordPinFailure(a);
+    return;
+  }
+  if (!validPin(newPin) || !validPin(confirmation) ||
+      !pinEqualsConstantWork(newPin, confirmation)) {
+    emitEvent(F("PIN_CHANGE_DENIED"), F("reason=invalid_format_or_confirmation_mismatch"));
+    return;
+  }
+  strncpy(a.pin, newPin, sizeof(a.pin) - 1);
+  a.pin[sizeof(a.pin) - 1] = '\0';
+  a.failedPins = 0;
+  lastCustomerActivityAt = millis();
+  emitEvent(F("PIN_CHANGED"), F("storage=RAM_ONLY;credential_not_logged"));
+  sendFrame(F("EVENT"), F("source=BOARD_REPORTED;event=PIN_CHANGED"));
 }
 
 void handleBalance() {
@@ -757,7 +838,7 @@ void handleWithdraw(const char *amountText) {
     emitEvent(F("WITHDRAWAL_DENIED"), F("reason=insufficient_balance"));
     return;
   }
-  if ((uint32_t)(millis() - budgetWindowStartedAt) >= BUDGET_WINDOW_MS) {
+  if ((uint32_t)(millis() - budgetWindowStartedAt) >= budgetWindowMs) {
     budgetWindowStartedAt = millis();
     windowWithdrawn = 0;
   }
@@ -794,11 +875,11 @@ void handleCommand(char *line) {
   work[sizeof(work) - 1] = '\0';
   for (size_t i = 0; work[i]; ++i) work[i] = (char)toupper((unsigned char)work[i]);
 
-  char *argv[7] = {0};
+  char *argv[10] = {0};
   uint8_t argc = 0;
   char *save = NULL;
   char *token = strtok_r(work, " \t", &save);
-  while (token && argc < 7) {
+  while (token && argc < 10) {
     argv[argc++] = token;
     token = strtok_r(NULL, " \t", &save);
   }
@@ -824,12 +905,14 @@ void handleCommand(char *line) {
     handleAddAccount(argv[1], argv[2], argv[3]);
   } else if (STREQ(argv[0], "SET_CASH") && argc == 5) {
     handleSetCash(argv[1], argv[2], argv[3], argv[4]);
-  } else if (STREQ(argv[0], "SET_POLICY") && argc == 3) {
-    handleSetPolicy(argv[1], argv[2]);
+  } else if (STREQ(argv[0], "SET_POLICY") && (argc == 3 || argc == 10)) {
+    handleSetPolicy(argv, argc);
   } else if (STREQ(argv[0], "CARD") && argc == 2) {
     handleCard(argv[1]);
   } else if (STREQ(argv[0], "PIN") && argc == 2) {
     handlePin(argv[1]);
+  } else if (STREQ(argv[0], "CHANGE_PIN") && argc == 4) {
+    handleChangePin(argv[1], argv[2], argv[3]);
   } else if (STREQ(argv[0], "BALANCE") && argc == 1) {
     handleBalance();
   } else if (STREQ(argv[0], "WITHDRAW") && argc == 2) {
@@ -912,23 +995,24 @@ void loop() {
   if (handshakeComplete && now - lastHeartbeatAt >= HEARTBEAT_MS)
     sendHeartbeat(now);
 
-  if (handshakeComplete && lastGuardianFrameAt != 0 &&
-      (uint32_t)(now - lastGuardianFrameAt) > GUARDIAN_TIMEOUT_MS) {
-    enterGuardianLock(F("Guardian response timeout."));
+  if (handshakeComplete && !guardianRevokeLatched) {
+    const uint32_t freshnessBase = lastGuardianStatusAt ? lastGuardianStatusAt : lastGuardianFrameAt;
+    if (freshnessBase != 0 && (uint32_t)(now - freshnessBase) > guardianTimeoutMs)
+      enterGuardianLock(F("Guardian status timeout."));
   }
 
   if (atmState == ATM_PIN_PENDING &&
-      (uint32_t)(now - pinEntryStartedAt) > PIN_ENTRY_TIMEOUT_MS) {
+      (uint32_t)(now - pinEntryStartedAt) > pinEntryTimeoutMs) {
     emitEvent(F("PIN_TIMEOUT"), F("reason=entry_timeout"));
     resetCustomerSession();
   }
   if (atmState == ATM_AUTHENTICATED &&
-      (uint32_t)(now - lastCustomerActivityAt) > SESSION_TIMEOUT_MS) {
+      (uint32_t)(now - lastCustomerActivityAt) > sessionTimeoutMs) {
     emitEvent(F("SESSION_TIMEOUT"), F("reason=idle_timeout"));
     resetCustomerSession();
   }
   if (atmState == ATM_WITHDRAW_PENDING &&
-      (uint32_t)(now - txPendingStartedAt) > 1800UL) {
+      (uint32_t)(now - txPendingStartedAt) > transactionDecisionTimeoutMs) {
     ++txDeniedCount;
     emitEvent(F("WITHDRAWAL_DENIED"), F("reason=guardian_decision_timeout"));
     enterGuardianLock(F("No matching per-transaction guardian decision arrived."));
