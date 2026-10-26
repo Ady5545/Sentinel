@@ -1288,7 +1288,7 @@ void setup() {
   Serial.println(F("No default card or PIN exists. Runtime provisioning required."));
   Serial.print(F("BUILD (self-reported): "));
   Serial.println(F("UNO-ATM-V3.4"));
-  Serial.print(F("PEER UART: AltSoftSerial RX=D"));
+  Serial.print(F("PEER UART: SoftwareSerial RX=D"));
   Serial.print(PEER_RX_PIN);
   Serial.print(F(" TX=D"));
   Serial.print(PEER_TX_PIN);
