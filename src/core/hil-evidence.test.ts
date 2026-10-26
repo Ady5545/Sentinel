@@ -40,9 +40,21 @@ describe('HIL evidence correlation', () => {
 
     const guardianCommit = reduceHilTransaction(unoCommit, 'sentinel',
       '[AUDIT] Matching controller-reported virtual transaction commit observed id=T0000007;amount=500');
-    expect(guardianCommit?.phase).toBe('RECONCILED');
+    expect(guardianCommit?.phase).toBe('GUARDIAN COMMIT OBSERVED');
     expect(guardianCommit?.guardianCommitSeen).toBe(true);
-    expect(canBeginHilWithdrawal(guardianCommit)).toBe(true);
+
+    const ackSent = reduceStructuredHilTransaction(guardianCommit, 'sentinel', {
+      type: 'COMMIT_ACK_SENT', id: 'T0000007', amount: 500
+    });
+    expect(ackSent?.phase).toBe('GUARDIAN ACK SENT');
+    expect(ackSent?.guardianAckSentSeen).toBe(true);
+
+    const ackAccepted = reduceStructuredHilTransaction(ackSent, 'uno', {
+      type: 'UNO_ACK_ACCEPTED', id: 'T0000007', amount: 500
+    });
+    expect(ackAccepted?.phase).toBe('RECONCILED');
+    expect(ackAccepted?.unoAckAcceptedSeen).toBe(true);
+    expect(canBeginHilWithdrawal(ackAccepted)).toBe(true);
   });
 
   it('does not reconcile a commit from the wrong ID or amount', () => {
@@ -200,9 +212,16 @@ describe('structured board-event correlation', () => {
     });
     expect(guardianCommit?.phase).toBe('GUARDIAN COMMIT OBSERVED');
 
-    const reconciled = reduceStructuredHilTransaction(guardianCommit, 'uno', {
+    const unoCommit = reduceStructuredHilTransaction(guardianCommit, 'uno', {
       type: 'ATM_EVENT', eventName: 'WITHDRAWAL_APPROVED',
       id: 'T0000007', amount: 500, balance: 49500
+    });
+    expect(unoCommit?.phase).toBe('GUARDIAN COMMIT OBSERVED');
+    const ackSent = reduceStructuredHilTransaction(unoCommit, 'sentinel', {
+      type: 'COMMIT_ACK_SENT', id: 'T0000007', amount: 500
+    });
+    const reconciled = reduceStructuredHilTransaction(ackSent, 'uno', {
+      type: 'UNO_ACK_ACCEPTED', id: 'T0000007', amount: 500
     });
     expect(reconciled?.phase).toBe('RECONCILED');
     expect(reconciled?.balance).toBe(49500);
