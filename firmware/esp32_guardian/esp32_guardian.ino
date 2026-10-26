@@ -622,7 +622,7 @@ void loop() {
   if (awaitingCommit && (uint32_t)(now - pendingPermitStartedAt) > commitTimeoutMs) {
     revoke("Controller did not report the matching transaction commit.");
   }
-  if (sessionEstablished && !revokeLatched &&
+  if (sessionEstablished && heartbeatSeen && !revokeLatched &&
       (uint32_t)(now - lastPeerStatusAt) >= PEER_STATUS_INTERVAL_MS) {
     sendFrame("STATUS", "HEALTHY");
     lastPeerStatusAt = now;
