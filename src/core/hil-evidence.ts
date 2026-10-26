@@ -3,6 +3,8 @@ export type HilTransactionPhase =
   | 'PERMIT OBSERVED'
   | 'UNO COMMITTED'
   | 'GUARDIAN COMMIT OBSERVED'
+  | 'GUARDIAN ACK SENT'
+  | 'UNO ACK ACCEPTED'
   | 'RECONCILED'
   | 'DENIED'
   | 'REVOKED'
@@ -15,6 +17,8 @@ export interface HilTransaction {
   permitSeen: boolean;
   unoCommitSeen: boolean;
   guardianCommitSeen: boolean;
+  guardianAckSentSeen: boolean;
+  unoAckAcceptedSeen: boolean;
   balance?: number;
   message: string;
 }
@@ -88,8 +92,21 @@ function mismatch(id: string, amount: number, message: string): HilTransaction {
     permitSeen: false,
     unoCommitSeen: false,
     guardianCommitSeen: false,
+    guardianAckSentSeen: false,
+    unoAckAcceptedSeen: false,
     message
   };
+}
+
+function phaseFromEvidence(transaction: HilTransaction): HilTransactionPhase {
+  if (transaction.permitSeen && transaction.unoCommitSeen && transaction.guardianCommitSeen &&
+      transaction.guardianAckSentSeen && transaction.unoAckAcceptedSeen) return 'RECONCILED';
+  if (transaction.unoAckAcceptedSeen) return 'UNO ACK ACCEPTED';
+  if (transaction.guardianAckSentSeen) return 'GUARDIAN ACK SENT';
+  if (transaction.guardianCommitSeen) return 'GUARDIAN COMMIT OBSERVED';
+  if (transaction.unoCommitSeen) return 'UNO COMMITTED';
+  if (transaction.permitSeen) return 'PERMIT OBSERVED';
+  return 'REQUESTED';
 }
 
 /**
@@ -143,6 +160,8 @@ export function reduceHilTransaction(
         permitSeen: false,
         unoCommitSeen: false,
         guardianCommitSeen: false,
+        guardianAckSentSeen: false,
+        unoAckAcceptedSeen: false,
         message: 'Uno reported a pending fictional withdrawal; waiting for the guardian decision.'
       };
     }
@@ -154,15 +173,17 @@ export function reduceHilTransaction(
           current.phase === 'DENIED' || current.phase === 'REVOKED' || current.phase === 'MISMATCH') {
         return mismatch(fields.id || 'UNKNOWN', amount, 'Uno commit report does not match the active, permitted HIL transaction. No desktop virtual-cash update is allowed.');
       }
-      const reconciled = current.guardianCommitSeen;
-      return {
+      const updated: HilTransaction = {
         ...current,
         unoCommitSeen: true,
-        balance: Number.isFinite(balance) ? balance : current.balance,
-        phase: reconciled ? 'RECONCILED' : 'UNO COMMITTED',
-        message: reconciled
-          ? 'Uno commit and guardian reconciliation reports match this transaction ID and amount.'
-          : 'Uno reports a commit; waiting for the guardian commit-reconciliation report.'
+        balance: Number.isFinite(balance) ? balance : current.balance
+      };
+      updated.phase = phaseFromEvidence(updated);
+      return {
+        ...updated,
+        message: updated.phase === 'RECONCILED'
+          ? 'The matching permit, Uno commit, guardian reconciliation, guardian ACK transmission, and Uno ACK acceptance are all observed.'
+          : 'Uno reports a commit; waiting for the matching guardian reconciliation and both sides of the commit ACK.'
       };
     }
 
@@ -248,13 +269,13 @@ export function reduceHilTransaction(
         ['DENIED', 'REVOKED', 'MISMATCH'].includes(current.phase)) {
       return mismatch(fields.id || 'UNKNOWN', amount, 'Guardian commit-reconciliation report does not match the active Uno transaction ID and amount.');
     }
+    const updated: HilTransaction = { ...current, guardianCommitSeen: true };
+    updated.phase = phaseFromEvidence(updated);
     return {
-      ...current,
-      guardianCommitSeen: true,
-      phase: current.unoCommitSeen ? 'RECONCILED' : 'GUARDIAN COMMIT OBSERVED',
-      message: current.unoCommitSeen
-        ? 'Uno commit and guardian reconciliation reports match this transaction ID and amount.'
-        : 'Guardian reports matching commit reconciliation; waiting for the Uno USB commit event before marking the HIL transaction reconciled.'
+      ...updated,
+      message: updated.phase === 'RECONCILED'
+        ? 'The matching permit, Uno commit, guardian reconciliation, guardian ACK transmission, and Uno ACK acceptance are all observed.'
+        : 'Guardian commit reconciliation matches; the desktop is still waiting for exact ACK transmission and Uno ACK acceptance evidence.'
     };
   }
 
@@ -424,8 +445,9 @@ export function reconcileHilShadowCommit(state: HilShadowState, transaction: Hil
     error: message
   });
 
-  if (!transaction.permitSeen || !transaction.unoCommitSeen || !transaction.guardianCommitSeen) {
-    return fail('The HIL lifecycle did not include every required permit/commit/reconciliation observation.');
+  if (!transaction.permitSeen || !transaction.unoCommitSeen || !transaction.guardianCommitSeen ||
+      !transaction.guardianAckSentSeen || !transaction.unoAckAcceptedSeen) {
+    return fail('The HIL lifecycle did not include the matching permit, Uno commit, guardian reconciliation, guardian ACK transmission, and Uno ACK acceptance.');
   }
   if (state.status !== 'COMMISSIONED' || !state.accountConfigured || !state.cassetteConfigured) {
     return fail('A board-reported transaction reconciled before the desktop HIL shadow was fully commissioned. No shadow money was changed.');
