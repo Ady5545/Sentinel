@@ -1,11 +1,11 @@
 # SENTINEL board firmware
 
-This contains the v2 educational ATM-controller and independent-guardian firmware for the existing Arduino Uno + ESP32 DevKit. No sensors, extra boards, real payment network, PIN pad, card reader or physical dispenser are required or implemented. GitHub Actions compiles both board targets; compilation is not a substitute for real bench testing.
+This contains the v3 educational ATM-controller and independent-guardian firmware for the existing Arduino Uno + ESP32 DevKit. No sensors, extra boards, real payment network, PIN pad, card reader or physical dispenser are required or implemented. GitHub Actions compiles both board targets; compilation is not a substitute for real bench testing.
 
 - [Arduino Uno ATM controller](uno_controller/uno_controller.ino)
 - [ESP32 independent guardian](esp32_guardian/esp32_guardian.ino)
-- [v2 implementation and test contract](../docs/FIRMWARE_V1_IMPLEMENTATION.md)
-- [v2 protocol specification](../docs/SENTINEL_PROTOCOL.md)
+- [V2 baseline implementation notes](../docs/FIRMWARE_V1_IMPLEMENTATION.md)
+- [v3 protocol specification](../docs/SENTINEL_PROTOCOL.md)
 - [V3 firmware reliability and hardening implementation plan](../docs/FIRMWARE_V3_IMPLEMENTATION_PLAN.md)
 
 ## Roles
@@ -22,7 +22,7 @@ Use Arduino IDE on the MacBook Air. Install the Espressif ESP32 board package if
 2. Close that monitor, upload the Uno controller sketch to **Arduino Uno**, and inspect its USB monitor at **115200 baud**.
 3. Power both boards independently over USB. Join GND. Wire **Uno D3 TX → suitable 5 V-to-3.3 V level shifter → ESP32 GPIO16 RX2** and **ESP32 GPIO17 TX2 → Uno D2 RX**. Leave Uno D0/D1 for USB upload/diagnostics.
 4. Never connect Uno 5 V TX directly to an ESP32 GPIO. Prefer a proper level shifter. A divider with 2.2 kΩ series and 2.2 kΩ to ground outputs roughly 2.5 V and may be marginal; use a calculated divider or level shifter. Do not join the 5 V and 3.3 V supply rails.
-5. The Uno should print a V2 handshake observation; the ESP32 should print GUARDIAN_STATUS and show a fresh heartbeat. Close Arduino Serial Monitor before letting the Electron app open the same USB port.
+5. Both boards must be flashed with the V3 sketches. The Uno should print V3 handshake completion; the ESP32 should progress from NEGOTIATING to OBSERVING after a valid heartbeat. A compile alone does not prove the physical link is stable. Close Arduino Serial Monitor before letting the Electron app open the same USB port.
 
 ## Uno operator/desktop command protocol
 
