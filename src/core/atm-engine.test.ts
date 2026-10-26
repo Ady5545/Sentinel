@@ -104,6 +104,48 @@ describe('ATM customer state machine', () => {
     expect(denied.lastDecision).toBe('BLOCK');
   });
 
+  it('rejects a permit issued in the future', () => {
+    const state = {
+      ...initialAtmState('protected'), screen: 'pending' as const, authenticated: true, service: 'withdrawal' as const,
+      pendingWithdrawal: { id: 'TX-FUTURE', amount: 1000, requestedAtMs: 1 },
+      simulationPermit: { id: 'P-FUTURE', transactionId: 'TX-FUTURE', amount: 1000, issuedAtMs: 20, expiresAtMs: 30, evidenceSource: 'SIMULATED' as const },
+      lastDecision: 'PERMIT' as const
+    };
+    const denied = atmReducer(state, { type: 'COMMIT_PENDING_WITHDRAWAL', nowMs: 10 });
+    expect(denied.accountBalance).toBe(state.accountBalance);
+    expect(denied.cassetteCash).toBe(state.cassetteCash);
+    expect(denied.dispensedTotal).toBe(0);
+    expect(denied.lastDecision).toBe('BLOCK');
+  });
+
+  it('rejects a permit bound to another transaction or amount', () => {
+    const base = {
+      ...initialAtmState('protected'), screen: 'pending' as const, authenticated: true, service: 'withdrawal' as const,
+      pendingWithdrawal: { id: 'TX-CURRENT', amount: 1000, requestedAtMs: 1 },
+      simulationPermit: { id: 'P-MISMATCH', transactionId: 'TX-OTHER', amount: 2000, issuedAtMs: 1, expiresAtMs: 100, evidenceSource: 'SIMULATED' as const },
+      lastDecision: 'PERMIT' as const
+    };
+    const denied = atmReducer(base, { type: 'COMMIT_PENDING_WITHDRAWAL', nowMs: 10 });
+    expect(denied.accountBalance).toBe(base.accountBalance);
+    expect(denied.cassetteCash).toBe(base.cassetteCash);
+    expect(denied.dispensedTotal).toBe(0);
+    expect(denied.lastDecision).toBe('BLOCK');
+  });
+
+  it('treats the exact expiry instant as expired', () => {
+    const state = {
+      ...initialAtmState('protected'), screen: 'pending' as const, authenticated: true, service: 'withdrawal' as const,
+      pendingWithdrawal: { id: 'TX-EDGE', amount: 1000, requestedAtMs: 1 },
+      simulationPermit: { id: 'P-EDGE', transactionId: 'TX-EDGE', amount: 1000, issuedAtMs: 1, expiresAtMs: 10, evidenceSource: 'SIMULATED' as const },
+      lastDecision: 'PERMIT' as const
+    };
+    const denied = atmReducer(state, { type: 'COMMIT_PENDING_WITHDRAWAL', nowMs: 10 });
+    expect(denied.accountBalance).toBe(state.accountBalance);
+    expect(denied.cassetteCash).toBe(state.cassetteCash);
+    expect(denied.dispensedTotal).toBe(0);
+    expect(denied.lastDecision).toBe('BLOCK');
+  });
+
   it('keeps the intentionally unprotected dispense only in baseline simulation', () => {
     let state: AtmState = {
       ...initialAtmState('baseline'), screen: 'pending' as const, authenticated: true, service: 'withdrawal' as const,
