@@ -17,7 +17,7 @@ type View = 'terminal' | 'machine' | 'sentinel' | 'experiments' | 'journal' | 'h
 type DeviceKey = 'uno' | 'sentinel';
 type Port = { path: string; manufacturer?: string; vendorId?: string; productId?: string; serialNumber?: string };
 type BoardPhase = 'DISCONNECTED' | 'USB OPEN' | 'BOOTED' | 'NEGOTIATING' | 'HEALTHY' | 'OBSERVING' | 'STALE' | 'REVOKED' | 'ERROR';
-type BoardState = { connected: boolean; path: string; lastLine: string; lastLineAt: number; phase: BoardPhase; error?: string };
+type BoardState = { connected: boolean; path: string; lastLine: string; lastLineAt: number; readinessAt: number; sessionId?: string; phase: BoardPhase; error?: string };
 const serviceList: { id: Service; label: string; subtitle: string; icon: typeof Banknote }[] = [
   { id: 'withdrawal', label: 'Cash withdrawal', subtitle: 'Dispense virtual banknotes', icon: Banknote },
   { id: 'balance', label: 'Balance inquiry', subtitle: 'View available funds', icon: WalletCards },
@@ -26,11 +26,16 @@ const serviceList: { id: Service; label: string; subtitle: string; icon: typeof 
   { id: 'pin-change', label: 'PIN services', subtitle: 'Demonstration only', icon: LockKeyhole }
 ];
 const initialBoards: Record<DeviceKey, BoardState> = {
-  uno: { connected: false, path: '', lastLine: '', lastLineAt: 0, phase: 'DISCONNECTED' },
-  sentinel: { connected: false, path: '', lastLine: '', lastLineAt: 0, phase: 'DISCONNECTED' }
+  uno: { connected: false, path: '', lastLine: '', lastLineAt: 0, readinessAt: 0, phase: 'DISCONNECTED' },
+  sentinel: { connected: false, path: '', lastLine: '', lastLineAt: 0, readinessAt: 0, phase: 'DISCONNECTED' }
 };
 const money = (value: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(value);
 const clock = () => new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+
+function invalidateInFlightHilTransaction(current: HilTransaction | null, message: string): HilTransaction | null {
+  if (!current || ['RECONCILED', 'DENIED', 'REVOKED', 'MISMATCH'].includes(current.phase)) return current;
+  return { ...current, phase: 'MISMATCH', message };
+}
 
 export default function App() {
   const [state, dispatch] = useReducer(atmReducer, undefined, () => initialAtmState('protected'));
@@ -58,10 +63,24 @@ export default function App() {
     if (!api) return;
     void api.getRuntimeInfo().then(setRuntime).catch(() => undefined);
     void api.listSerialPorts().then(result => setPorts(result.ports)).catch(() => undefined);
+    void api.getSerialReadiness().then(snapshot => {
+      setBoards(previous => ({
+        uno: { ...previous.uno, connected: snapshot.boards.uno.connected, path: snapshot.boards.uno.path, sessionId: snapshot.boards.uno.sessionId, phase: snapshot.boards.uno.phase, lastLineAt: snapshot.boards.uno.lastLineAt, readinessAt: snapshot.boards.uno.readinessAt },
+        sentinel: { ...previous.sentinel, connected: snapshot.boards.sentinel.connected, path: snapshot.boards.sentinel.path, sessionId: snapshot.boards.sentinel.sessionId, phase: snapshot.boards.sentinel.phase, lastLineAt: snapshot.boards.sentinel.lastLineAt, readinessAt: snapshot.boards.sentinel.readinessAt }
+      }));
+    }).catch(() => undefined);
     const unsubscribe = api.onSerialEvent(event => {
       const safeLine = event.kind === 'line' ? redactSensitiveSerialText(event.line || '') : '';
       const detail = event.kind === 'line' ? safeLine : event.message || event.kind;
       setSerialEvents(previous => [...previous.slice(-199), clock() + '  ' + event.device.toUpperCase() + '  ' + detail]);
+      if (event.kind === 'opened') {
+        setHilTransaction(previous => invalidateInFlightHilTransaction(previous, 'A new USB connection session was opened. Any unresolved HIL transaction must be reconciled before further action.'));
+      } else if (event.kind === 'closed' || event.kind === 'error') {
+        setHilTransaction(previous => invalidateInFlightHilTransaction(previous, 'Serial loss or malformed input invalidated board readiness. The active HIL transaction requires reconciliation before continuing.'));
+      }
+      if (event.kind === 'line' && event.parsed?.type === 'BOARD_BOOT') {
+        setHilTransaction(previous => invalidateInFlightHilTransaction(previous, 'A board boot/session-start record was observed. Previous readiness and any unresolved transaction are invalidated.'));
+      }
       if (event.kind === 'line' && event.line) {
         setHilTransaction(previous => reduceHilTransaction(previous, event.device, event.line || ''));
       }
@@ -69,10 +88,12 @@ export default function App() {
         const current = previous[event.device];
         const line = event.kind === 'line' ? (event.line || '') : '';
         let phase: BoardPhase = current.phase;
-        if (event.kind === 'opened') phase = 'USB OPEN';
+        const parsedPhase = event.kind === 'line' ? event.parsed?.phase : undefined;
+        if (event.kind === 'opened') phase = event.phase || 'USB OPEN';
         else if (event.kind === 'closed') phase = 'DISCONNECTED';
         else if (event.kind === 'error') phase = 'ERROR';
-        else if (line.includes('SENTINEL ATM CONTROLLER V3.3 READY') || line.includes('SENTINEL ESP32 GUARDIAN V3.3 READY')) phase = 'BOOTED';
+        else if (parsedPhase) phase = parsedPhase;
+        else if (/SENTINEL ATM CONTROLLER V\\d+(?:\\.\\d+)? READY|SENTINEL ESP32 GUARDIAN V\\d+(?:\\.\\d+)? READY/.test(line) || line.startsWith('SESSION: ')) phase = 'BOOTED';
         else if (line.includes('[LINK] V3 negotiation started') || line.includes('[LINK] V3 guardian HELLO observed')) phase = 'NEGOTIATING';
         else if (event.device === 'uno' && line.includes('[STATUS_RX] Accepted HEALTHY')) phase = 'HEALTHY';
         else if (event.device === 'sentinel' && line.includes('GUARDIAN_STATUS|mode=OBSERVING')) phase = 'OBSERVING';
@@ -84,8 +105,11 @@ export default function App() {
             ...current,
             connected: event.kind === 'opened' ? true : event.kind === 'closed' || event.kind === 'error' ? false : current.connected,
             path: event.path || current.path,
+            sessionId: event.sessionId || (event.kind === 'closed' || event.kind === 'error' ? undefined : current.sessionId),
             lastLine: event.kind === 'line' ? redactSensitiveSerialText(event.line || '') : current.lastLine,
             lastLineAt: event.kind === 'line' ? (event.at || Date.now()) : event.kind === 'closed' || event.kind === 'error' ? 0 : current.lastLineAt,
+            readinessAt: event.kind === 'closed' || event.kind === 'error' || (parsedPhase !== undefined && !['HEALTHY', 'OBSERVING'].includes(parsedPhase)) ? 0
+              : parsedPhase === 'HEALTHY' || parsedPhase === 'OBSERVING' ? (event.at || Date.now()) : current.readinessAt,
             phase,
             error: event.kind === 'error' ? event.message : undefined
           }
@@ -138,8 +162,8 @@ export default function App() {
         mode: 'OPTIONAL HARDWARE-IN-THE-LOOP OBSERVATION',
         provenance: 'BOARD-REPORTED USB console text; parsed correlation is not cryptographic attestation',
         boards: {
-          uno: { connected: boards.uno.connected, phase: boards.uno.phase, lastLineAt: boards.uno.lastLineAt, lastLine: redactSensitiveSerialText(boards.uno.lastLine) },
-          sentinel: { connected: boards.sentinel.connected, phase: boards.sentinel.phase, lastLineAt: boards.sentinel.lastLineAt, lastLine: redactSensitiveSerialText(boards.sentinel.lastLine) }
+          uno: { connected: boards.uno.connected, phase: boards.uno.phase, sessionId: boards.uno.sessionId, lastLineAt: boards.uno.lastLineAt, readinessAt: boards.uno.readinessAt, lastLine: redactSensitiveSerialText(boards.uno.lastLine) },
+          sentinel: { connected: boards.sentinel.connected, phase: boards.sentinel.phase, sessionId: boards.sentinel.sessionId, lastLineAt: boards.sentinel.lastLineAt, readinessAt: boards.sentinel.readinessAt, lastLine: redactSensitiveSerialText(boards.sentinel.lastLine) }
         },
         activeTransaction: hilTransaction,
         recentSerialObservations: serialEvents.slice(-200).map(redactSensitiveSerialText)
@@ -197,16 +221,19 @@ export default function App() {
     }
     const response = await window.sentinelDesktop.connectBoard({ device, path, baudRate: 115200 });
     setPortMessage(response.ok ? 'USB console open. Serial text is observational, not proof of controller integrity.' : response.error || 'Connection failed.');
-    if (response.ok) setBoards(previous => ({ ...previous, [device]: { ...previous[device], connected: true, path, phase: 'USB OPEN', lastLineAt: 0 } }));
+    if (response.ok) setBoards(previous => ({ ...previous, [device]: { ...previous[device], connected: true, path, sessionId: response.sessionId, phase: response.phase || 'USB OPEN', lastLineAt: 0, readinessAt: 0 } }));
   };
   const disconnectBoard = async (device: DeviceKey) => {
     if (!window.sentinelDesktop) return;
     await window.sentinelDesktop.disconnectBoard(device);
-    setBoards(previous => ({ ...previous, [device]: { ...previous[device], connected: false, path: '', lastLineAt: 0, phase: 'DISCONNECTED' } }));
+    setBoards(previous => ({ ...previous, [device]: { ...previous[device], connected: false, path: '', sessionId: undefined, lastLineAt: 0, readinessAt: 0, phase: 'DISCONNECTED' } }));
   };
   const sendBoardCommand = async (device: DeviceKey, command: string) => {
     if (!window.sentinelDesktop) return { ok: false, error: 'Board commands require the installed desktop application.' };
-    const response = await window.sentinelDesktop.sendBoardCommand({ device, command });
+    const parts = command.split(' ');
+    const [name, ...args] = parts;
+    if (!name || parts.some(part => !part)) return { ok: false, error: 'Use a command name followed by single-space-separated arguments.' };
+    const response = await window.sentinelDesktop.sendBoardCommand({ device, command: { name, args } });
     setPortMessage(response.ok
       ? (response.commandName || 'Command') + ' bytes were written to ' + device.toUpperCase() + '; this is not confirmation the board accepted the command.'
       : response.error || 'Board command write failed.');
@@ -500,8 +527,8 @@ function HardwareView({ ports, chosenPort, setChosenPort, boards, message, seria
   const [drafts, setDrafts] = useState<Record<DeviceKey, string>>({ uno: 'STATUS', sentinel: 'STATUS' });
   const [commandBusy, setCommandBusy] = useState(false);
   const [commandFeedback, setCommandFeedback] = useState('');
-  const isFresh = (device: DeviceKey) => boards[device].connected && boards[device].lastLineAt > 0 &&
-    nowMs - boards[device].lastLineAt <= 3500;
+  const isFresh = (device: DeviceKey) => boards[device].connected && boards[device].readinessAt > 0 &&
+    nowMs - boards[device].readinessAt <= 3500;
   const phaseForDisplay = (device: DeviceKey): BoardPhase => {
     const board = boards[device];
     if (board.connected && ['HEALTHY', 'OBSERVING'].includes(board.phase) && !isFresh(device)) return 'STALE';
