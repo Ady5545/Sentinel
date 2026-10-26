@@ -403,17 +403,27 @@ export function researchSessionReducer(
     if (action.kind !== 'line') return next;
 
     if (parsed?.type === 'BOARD_BOOT') {
-      const boardBootEpochs = { ...next.boardBootEpochs, [action.device]: next.boardBootEpochs[action.device] + 1 };
+      const previousEpoch = next.boardBootEpochs[action.device];
+      const boardBootEpochs = { ...next.boardBootEpochs, [action.device]: previousEpoch + 1 };
       next = { ...next, boardBootEpochs };
-      if (next.mode === 'HIL' || next.hilShadow.status !== 'UNCOMMISSIONED') {
+      const shadowWasEstablished = next.hilShadow.status !== 'UNCOMMISSIONED' ||
+        next.hilShadow.accountConfigured || next.hilShadow.cassetteConfigured ||
+        next.hilShadow.committedTransactionIds.length > 0;
+      const bootInvalidatesAuthority = next.hilFaultLatched || previousEpoch > 0 ||
+        shadowWasEstablished || unresolved(next.hilTransaction);
+      if (bootInvalidatesAuthority) {
         next = latchFault(next, action.at, source, 'BOARD_BOOT_OBSERVED', {
           sessionId: action.sessionId, device: action.device, bootEpoch: boardBootEpochs[action.device]
         }, 'A board reboot invalidated the RAM-only board configuration and HIL authority for this run.');
+      } else {
+        next = appendRecord(next, action.at, source, 'INITIAL_BOARD_BOOT', 'BOARD_REPORTED', {
+          sessionId: action.sessionId, device: action.device, bootEpoch: boardBootEpochs[action.device]
+        });
       }
       return next;
     }
 
-    if (action.device === 'uno' && line.startsWith('ATM_EVENT|')) {
+    if (next.mode === 'HIL' && action.device === 'uno' && line.startsWith('ATM_EVENT|')) {
       const shadowBefore = next.hilShadow;
       const shadowAfter = reduceHilShadowObservation(shadowBefore, line);
       if (shadowAfter !== shadowBefore) {
