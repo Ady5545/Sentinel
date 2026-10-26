@@ -190,6 +190,7 @@ class SerialManager extends EventEmitter {
     this.boardBootEpochs = { uno: 0, sentinel: 0 };
     this.hilFaultLatched = false;
     this.faultResetBaseline = null;
+    this.hilShadowTouched = false;
     this.now = options.now || (() => Date.now());
     this.listPortsProvider = options.listPorts || (() => SerialPort.list());
     this.createPort = options.createPort || (config => new SerialPort(config));
@@ -293,8 +294,15 @@ class SerialManager extends EventEmitter {
     }
     this.hilFaultLatched = false;
     this.faultResetBaseline = null;
+    this.hilShadowTouched = false;
     this.emit('event', { kind: 'fault-cleared', code: 'HIL_FAULT_CLEARED', message: 'Host HIL fault cleared after paired reboot/readiness qualification.' });
     return { ok: true };
+  }
+
+  rendererReloaded() {
+    if (this.hilShadowTouched) {
+      this.latchHilFault('Renderer reload lost the in-memory HIL shadow ledger; both boards must be reset and recommissioned.');
+    }
   }
 
   latchHilFault(reason) {
@@ -337,7 +345,8 @@ class SerialManager extends EventEmitter {
       this.now() - sentinel.readinessAt <= this.freshnessMs;
     return { pairReady, freshnessMs: this.freshnessMs, researchMode: this.researchMode, boards,
       hilFaultLatched: this.hilFaultLatched, faultResetBaseline: this.faultResetBaseline,
-      boardBootEpochs: { ...this.boardBootEpochs }, canClearHilFault: this.canClearHilFault() };
+      boardBootEpochs: { ...this.boardBootEpochs }, canClearHilFault: this.canClearHilFault(),
+      hilShadowTouched: this.hilShadowTouched };
   }
 
   isPairReady() {
@@ -455,6 +464,10 @@ class SerialManager extends EventEmitter {
       if (previousEpoch > 0) this.latchHilFault('A board reboot was observed after the initial startup; host HIL authority fault latched.');
     }
     if (parsed.type === 'AUTHORITY_REVOKED') this.latchHilFault('Board-reported guardian revocation; host HIL authority fault latched.');
+    if (this.researchMode === 'HIL' && state.device === 'uno' && parsed.type === 'ATM_EVENT' &&
+        ['ACCOUNT_PROVISIONED', 'CASH_CONFIGURED'].includes(parsed.eventName || '')) {
+      this.hilShadowTouched = true;
+    }
     if (parsed.phase) {
       state.phase = parsed.phase;
       if (parsed.phase === 'HEALTHY' || parsed.phase === 'OBSERVING') state.readinessAt = at;
