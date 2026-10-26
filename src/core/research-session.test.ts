@@ -17,6 +17,7 @@ function boardEvent(
     at: number;
     line?: string;
     parsed?: { type: string; phase?: 'BOOTED' | 'HEALTHY' | 'OBSERVING' | 'REVOKED' | 'NEGOTIATING'; eventName?: string; id?: string; amount?: number; balance?: number; reason?: string };
+    phase?: string;
     commandName?: string;
     requestId?: string;
     sensitive?: boolean;
