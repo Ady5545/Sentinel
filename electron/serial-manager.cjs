@@ -85,7 +85,7 @@ function parseBoardLine(device, line) {
   }
   if (device === 'sentinel' && line.startsWith('[DENY] ')) {
     const fields = parsedFields(line.slice('[DENY] '.length));
-    return { type: 'DENY', id: safeId(fields.id), amount: safeAmount(fields.amount), reason: typeof fields.reason === 'string' ? fields.reason.slice(0, 64) : undefined };
+    return { type: 'DENY', id: safeId(fields.id), amount: safeAmount(fields.amount), reason: typeof fields.reason === 'string' ? redactSensitiveSerialText(fields.reason).slice(0, 64) : undefined };
   }
   if (device === 'sentinel' && line.includes('[AUDIT] Matching controller-reported virtual transaction commit observed')) {
     const fields = parsedFields(line);
@@ -232,8 +232,10 @@ class SerialManager extends EventEmitter {
       port.on('error', () => {
         state.failed = true;
         state.phase = 'ERROR';
+        state.readinessAt = 0;
         this.emit('event', { kind: 'error', code: 'PORT_ERROR', device, path: requestedPath, sessionId: state.sessionId, message: 'Serial port error; readiness is revoked until reconnect.' });
         if (!settled) failOpen(new Error('Serial port error.'));
+        else void this.disconnect(device);
       });
       port.on('close', () => {
         if (state.closed) return;
@@ -320,6 +322,7 @@ class SerialManager extends EventEmitter {
       state.phase = 'ERROR';
       state.readinessAt = 0;
       this.emit('event', { kind: 'error', code: 'WRITE_FAILED', device, path: state.path, sessionId: state.sessionId, message: 'Serial write failed; board readiness invalidated.' });
+      void this.disconnect(device);
       throw new Error('Serial write failed; reconnect and re-establish both board readiness reports.');
     }
 
@@ -329,6 +332,18 @@ class SerialManager extends EventEmitter {
       message: 'Command bytes drained locally; board acceptance has not yet been confirmed.'
     });
     return { ok: true, requestId, commandName: validation.commandName, sensitive: validation.sensitive };
+  }
+
+  rejectInput(state, code, message) {
+    if (state.closed || state.failed) return;
+    state.failed = true;
+    state.phase = 'ERROR';
+    state.readinessAt = 0;
+    state.buffer = '';
+    state.droppingLongLine = false;
+    this.emit('event', { kind: 'error', code, device: state.device, path: state.path, sessionId: state.sessionId, message });
+    // Ambiguous framing revokes readiness and releases the port for a clean reconnect.
+    void this.disconnect(state.device);
   }
 
   consume(state, chunk) {
@@ -344,9 +359,7 @@ class SerialManager extends EventEmitter {
     }
     state.buffer += text;
     if (state.buffer.length > this.maxLineLength * 2 && !state.buffer.includes('\n')) {
-      state.buffer = '';
-      state.droppingLongLine = true;
-      this.emit('event', { kind: 'error', code: 'LINE_TOO_LONG', device: state.device, path: state.path, sessionId: state.sessionId, message: 'Oversized serial line rejected; dropping input until newline.' });
+      this.rejectInput(state, 'LINE_TOO_LONG', 'Oversized serial line rejected; board readiness invalidated.');
       return;
     }
 
@@ -355,11 +368,13 @@ class SerialManager extends EventEmitter {
       const candidate = state.buffer.slice(0, newline).replace(/\r$/, '');
       state.buffer = state.buffer.slice(newline + 1);
       if (candidate.length > this.maxLineLength) {
-        this.emit('event', { kind: 'error', code: 'LINE_TOO_LONG', device: state.device, path: state.path, sessionId: state.sessionId, message: 'Oversized serial line rejected.' });
+        this.rejectInput(state, 'LINE_TOO_LONG', 'Oversized serial line rejected; board readiness invalidated.');
+        return;
       } else if (!candidate) {
         // Ignore an empty line, but keep framing synchronized.
       } else if (candidate !== candidate.trim() || /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/.test(candidate)) {
-        this.emit('event', { kind: 'error', code: 'MALFORMED_LINE', device: state.device, path: state.path, sessionId: state.sessionId, message: 'Malformed serial line rejected; no readiness update was applied.' });
+        this.rejectInput(state, 'MALFORMED_LINE', 'Malformed serial line rejected; board readiness invalidated.');
+        return;
       } else {
         this.acceptLine(state, candidate);
       }
@@ -367,9 +382,8 @@ class SerialManager extends EventEmitter {
     }
 
     if (state.buffer.length > this.maxLineLength) {
-      state.buffer = '';
-      state.droppingLongLine = true;
-      this.emit('event', { kind: 'error', code: 'LINE_TOO_LONG', device: state.device, path: state.path, sessionId: state.sessionId, message: 'Oversized serial line rejected; dropping input until newline.' });
+      this.rejectInput(state, 'LINE_TOO_LONG', 'Oversized serial line rejected; board readiness invalidated.');
+      return;
     }
   }
 
@@ -393,16 +407,25 @@ class SerialManager extends EventEmitter {
     if (!state) return;
     state.readinessAt = 0;
     if (!state.port.isOpen) {
-      state.closed = true;
-      state.connected = false;
+      if (!state.closed) {
+        state.closed = true;
+        state.connected = false;
+        state.phase = 'DISCONNECTED';
+        state.readinessAt = 0;
+        this.emit('event', { kind: 'closed', code: 'PORT_CLOSED', device, path: state.path, sessionId: state.sessionId, message: 'Serial port closed; readiness invalidated.' });
+      }
       if (this.devices.get(device) === state) this.devices.delete(device);
       return;
     }
     await new Promise(resolve => {
       state.port.close(() => {
-        state.connected = false;
-        state.closed = true;
-        state.phase = 'DISCONNECTED';
+        if (!state.closed) {
+          state.connected = false;
+          state.closed = true;
+          state.phase = 'DISCONNECTED';
+          state.readinessAt = 0;
+          this.emit('event', { kind: 'closed', code: 'PORT_CLOSED', device, path: state.path, sessionId: state.sessionId, message: 'Serial port closed; readiness invalidated.' });
+        }
         if (this.devices.get(device) === state) this.devices.delete(device);
         resolve();
       });
