@@ -106,6 +106,40 @@ describe('coordinated research session', () => {
     expect(duplicate.hilShadow.committedTransactionIds).toEqual(['T0000001']);
   });
 
+  it('holds shadow cash until both commit ACK observations match the active ID and amount', () => {
+    const commissioned = readyCommissionedSession();
+    let s = boardEvent(commissioned, { kind: 'line', device: 'uno', sessionId: 'uno-session-1', at: 200,
+      line: 'ATM_EVENT|WITHDRAWAL_PENDING|id=T0000001;amount=500',
+      parsed: { type: 'ATM_EVENT', eventName: 'WITHDRAWAL_PENDING', id: 'T0000001', amount: 500 } });
+    s = boardEvent(s, { kind: 'line', device: 'sentinel', sessionId: 'esp-session-1', at: 210,
+      line: '[PERMIT] One-shot observation issued for T0000001; amount=500',
+      parsed: { type: 'PERMIT', id: 'T0000001', amount: 500 } });
+    s = boardEvent(s, { kind: 'line', device: 'uno', sessionId: 'uno-session-1', at: 220,
+      line: 'ATM_EVENT|WITHDRAWAL_APPROVED|id=T0000001;amount=500;balance=49500',
+      parsed: { type: 'ATM_EVENT', eventName: 'WITHDRAWAL_APPROVED', id: 'T0000001', amount: 500, balance: 49500 } });
+    s = boardEvent(s, { kind: 'line', device: 'sentinel', sessionId: 'esp-session-1', at: 230,
+      line: '[RECONCILE] Matching controller-reported virtual commit id=T0000001;amount=500',
+      parsed: { type: 'COMMIT_RECONCILIATION', id: 'T0000001', amount: 500 } });
+
+    expect(s.hilTransaction?.phase).toBe('GUARDIAN COMMIT OBSERVED');
+    expect(s.hilTransaction?.guardianAckSentSeen).toBe(false);
+    expect(s.hilTransaction?.unoAckAcceptedSeen).toBe(false);
+    expect(s.hilShadow.accountBalance).toBe(50000);
+    expect(s.hilShadow.cassetteCash).toBe(17000);
+    expect(s.hilShadow.dispensedTotal).toBe(0);
+    expect(s.hilShadow.committedTransactionIds).toEqual([]);
+
+    s = boardEvent(s, { kind: 'line', device: 'sentinel', sessionId: 'esp-session-1', at: 240,
+      line: '[COMMIT_ACK_TX] ACK sequence=8 acknowledges UNO EVENT sequence=7; id=T0000001; amount=750',
+      parsed: { type: 'COMMIT_ACK_SENT', id: 'T0000001', amount: 750 } });
+    expect(s.hilFaultLatched).toBe(true);
+    expect(s.hilTransaction?.phase).toBe('MISMATCH');
+    expect(s.hilShadow.status).toBe('RECONCILIATION REQUIRED');
+    expect(s.hilShadow.accountBalance).toBe(50000);
+    expect(s.hilShadow.cassetteCash).toBe(17000);
+    expect(s.hilShadow.dispensedTotal).toBe(0);
+  });
+
   it('quarantines mismatched IDs and never mutates shadow money', () => {
     const commissioned = readyCommissionedSession();
     let s = boardEvent(commissioned, { kind: 'line', device: 'uno', sessionId: 'uno-session-1', at: 200,
