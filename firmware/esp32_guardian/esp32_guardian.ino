@@ -307,8 +307,8 @@ void handleHeartbeat(const char *payload) {
   heartbeatSeen = true;
   lastHeartbeatAt = millis();
   // Half-duplex turn-taking: answer only after the Uno has finished its heartbeat.
-  // This avoids unsolicited ESP32 frames colliding with SoftwareSerial TX on the Uno.
-  sendFrame("STATUS", "HEALTHY");
+  // Never advertise healthy status after this guardian has latched a revocation.
+  if (!revokeLatched) sendFrame("STATUS", "HEALTHY");
 }
 
 void handleEvent(const char *payload) {
