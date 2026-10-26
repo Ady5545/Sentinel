@@ -683,6 +683,30 @@ void handleUnoLine(char *line) {
   }
 
   if (!sessionEstablished) {
+    // Controlled demo fallback: a correctly framed, explicitly SIMULATED
+    // integrity event may arrive before HELLO when the return handshake is
+    // unavailable. Record it as pre-session fixture evidence and fail closed.
+    // This never establishes a session or grants transaction authority.
+    if (strcmp(type, "EVENT") == 0) {
+      char eventName[24] = {0};
+      char source[24] = {0};
+      const char *const fixtureKeys[] = {"source", "event"};
+      const bool validFixture =
+          payloadHasExactKeys(payload, fixtureKeys, 2) &&
+          parsePayloadField(payload, "event", eventName, sizeof(eventName)) &&
+          parsePayloadField(payload, "source", source, sizeof(source)) &&
+          strcmp(source, "SIMULATED") == 0 &&
+          (strcmp(eventName, "PROFILE_MISMATCH") == 0 ||
+           strcmp(eventName, "PRIVILEGED_PATH") == 0 ||
+           strcmp(eventName, "SEQUENCE_DIVERGENCE") == 0);
+      if (validFixture) {
+        Serial.print(F("[DEMO] Pre-session simulated UART fixture received: "));
+        Serial.println(eventName);
+        Serial.println(F("[DEMO] No session established; transaction authority remains unavailable."));
+        revoke("Pre-session simulated integrity fixture received; fail-closed demo revocation.");
+        return;
+      }
+    }
     if (strcmp(type, "HELLO") != 0 || strcmp(payload, "UNO-ATM-V3") != 0 || seq != 1) {
       revoke("Expected initial S3 UNO-ATM-V3 HELLO with sequence 1.");
       return;
