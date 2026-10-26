@@ -1242,9 +1242,14 @@ void handleCommand(char *line) {
       emitEvent(F("LOGOUT_IGNORED"), F("reason=no_authenticated_session"));
     }
   } else if ((STREQ(argv[0], "FIXTURE_MISMATCH") || STREQ(argv[0], "DEMO_ATTACK")) && argc == 1) {
-    Serial.println(F("[DEMO] Controlled software integrity-violation fixture triggered."));
-    Serial.println(F("[DEMO] This local fixture does not assert UART delivery or peer detection."));
+    Serial.println(F("[DEMO] Controlled integrity-violation fixture triggered."));
+    Serial.println(F("[DEMO] Sending an explicitly SIMULATED profile-mismatch event to SENTINEL."));
     emitEvent(F("SIMULATED_INTEGRITY_FIXTURE"), F("source=LOCAL_SOFTWARE;event=PROFILE_MISMATCH"));
+    // Send the fixture before the local lock. This tests the UNO -> ESP32 UART
+    // path without claiming that the fixture is a real hardware compromise.
+    const bool fixtureSent = sendFrame(F("EVENT"), F("source=SIMULATED;event=PROFILE_MISMATCH"));
+    Serial.print(F("[DEMO] UART fixture send call completed; peer receipt is not implied: "));
+    Serial.println(fixtureSent ? F("yes") : F("no"));
     enterGuardianLock(F("SIMULATED integrity-violation fixture triggered by operator."));
     Serial.println(F("[DEMO] Virtual dispensing is now DENIED by the ATM controller."));
   } else {
