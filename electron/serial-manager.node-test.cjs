@@ -194,6 +194,11 @@ test('oversized and malformed input invalidate readiness and release the port', 
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(h.emitted.some(event => event.code === 'MALFORMED_LINE'), true);
   assert.equal(h.manager.getReadinessSnapshot().boards.uno.connected, false);
+  await h.manager.connect('uno', '/dev/ttyUNO', 115200);
+  h.created.get('/dev/ttyUNO').feed('é\n');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.emitted.filter(event => event.code === 'MALFORMED_LINE').length, 2);
+  assert.equal(h.manager.getReadinessSnapshot().boards.uno.connected, false);
 });
 
 test('unplug invalidates the session and pair readiness immediately', async () => {
