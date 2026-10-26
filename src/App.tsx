@@ -80,38 +80,45 @@ export default function App() {
         uno: { ...previous.uno, connected: snapshot.boards.uno.connected, path: snapshot.boards.uno.path, sessionId: snapshot.boards.uno.sessionId, phase: snapshot.boards.uno.phase, lastLineAt: snapshot.boards.uno.lastLineAt, readinessAt: snapshot.boards.uno.readinessAt },
         sentinel: { ...previous.sentinel, connected: snapshot.boards.sentinel.connected, path: snapshot.boards.sentinel.path, sessionId: snapshot.boards.sentinel.sessionId, phase: snapshot.boards.sentinel.phase, lastLineAt: snapshot.boards.sentinel.lastLineAt, readinessAt: snapshot.boards.sentinel.readinessAt }
       }));
+      dispatchResearch({
+        type: 'RESTORE_BRIDGE', mode: snapshot.researchMode, at: Date.now(),
+        boards: { uno: snapshot.boards.uno, sentinel: snapshot.boards.sentinel }
+      });
     }).catch(() => undefined);
     const unsubscribe = api.onSerialEvent(event => {
+      if (!event.device) {
+        if (event.message) setPortMessage(event.message);
+        return;
+      }
       const safeLine = event.kind === 'line' ? redactSensitiveSerialText(event.line || '') : '';
       const detail = event.kind === 'line' ? safeLine : event.message || event.kind;
-      setSerialEvents(previous => [...previous.slice(-199), clock() + '  ' + event.device.toUpperCase() + '  ' + detail]);
-      if (event.kind === 'opened') {
-        setHilTransaction(previous => invalidateInFlightHilTransaction(previous, 'A new USB connection session was opened. Any unresolved HIL transaction must be reconciled before further action.'));
-      } else if (event.kind === 'closed' || event.kind === 'error') {
-        setHilTransaction(previous => invalidateInFlightHilTransaction(previous, 'Serial loss or malformed input invalidated board readiness. The active HIL transaction requires reconciliation before continuing.'));
-      }
-      if (event.kind === 'line' && event.parsed?.type === 'BOARD_BOOT') {
-        setBoardBootEpochs(previous => ({ ...previous, [event.device]: previous[event.device] + 1 }));
-        setHilTransaction(previous => invalidateInFlightHilTransaction(previous, 'A board boot/session-start record was observed. Previous readiness and any unresolved transaction are invalidated.'));
-      }
-      if (event.kind === 'line' && event.parsed?.type === 'ATM_EVENT' && event.parsed.eventName === 'WITHDRAWAL_PENDING') {
-        setHilTransactionStartedAt(event.at || Date.now());
-      }
-      if (event.kind === 'line' && event.line) {
-        setHilTransaction(previous => event.parsed
-          ? reduceStructuredHilTransaction(previous, event.device, event.parsed)
-          : reduceHilTransaction(previous, event.device, event.line || ''));
+      setSerialEvents(previous => [...previous.slice(-199), clock() + '  ' + event.device.toUpperCase() + '  ' + redactSensitiveSerialText(detail)]);
+      if (['opened', 'closed', 'error', 'line', 'command-written'].includes(event.kind)) {
+        dispatchResearch({
+          type: 'BOARD_EVENT',
+          kind: event.kind as 'opened' | 'closed' | 'error' | 'line' | 'command-written',
+          device: event.device,
+          sessionId: event.sessionId,
+          at: event.at || Date.now(),
+          line: event.kind === 'line' ? safeLine : undefined,
+          parsed: event.parsed,
+          phase: event.phase,
+          commandName: event.commandName,
+          sensitive: event.sensitive,
+          requestId: event.requestId,
+          message: event.message
+        });
       }
       setBoards(previous => {
         const current = previous[event.device];
-        const line = event.kind === 'line' ? (event.line || '') : '';
+        const line = event.kind === 'line' ? (safeLine || '') : '';
         let phase: BoardPhase = current.phase;
         const parsedPhase = event.kind === 'line' ? event.parsed?.phase : undefined;
         if (event.kind === 'opened') phase = event.phase || 'USB OPEN';
         else if (event.kind === 'closed') phase = 'DISCONNECTED';
         else if (event.kind === 'error') phase = 'ERROR';
         else if (parsedPhase) phase = parsedPhase;
-        else if (/SENTINEL ATM CONTROLLER V\\d+(?:\\.\\d+)? READY|SENTINEL ESP32 GUARDIAN V\\d+(?:\\.\\d+)? READY/.test(line) || line.startsWith('SESSION: ')) phase = 'BOOTED';
+        else if (/SENTINEL ATM CONTROLLER V\d+(?:\.\d+)? READY|SENTINEL ESP32 GUARDIAN V\d+(?:\.\d+)? READY/.test(line) || line.startsWith('SESSION: ')) phase = 'BOOTED';
         else if (line.includes('[LINK] V3 negotiation started') || line.includes('[LINK] V3 guardian HELLO observed')) phase = 'NEGOTIATING';
         else if (event.device === 'uno' && line.includes('[STATUS_RX] Accepted HEALTHY')) phase = 'HEALTHY';
         else if (event.device === 'sentinel' && line.includes('GUARDIAN_STATUS|mode=OBSERVING')) phase = 'OBSERVING';
@@ -124,7 +131,7 @@ export default function App() {
             connected: event.kind === 'opened' ? true : event.kind === 'closed' || event.kind === 'error' ? false : current.connected,
             path: event.path || current.path,
             sessionId: event.sessionId || (event.kind === 'closed' || event.kind === 'error' ? undefined : current.sessionId),
-            lastLine: event.kind === 'line' ? redactSensitiveSerialText(event.line || '') : current.lastLine,
+            lastLine: event.kind === 'line' ? safeLine : current.lastLine,
             lastLineAt: event.kind === 'line' ? (event.at || Date.now()) : event.kind === 'closed' || event.kind === 'error' ? 0 : current.lastLineAt,
             readinessAt: event.kind === 'closed' || event.kind === 'error' || (parsedPhase !== undefined && !['HEALTHY', 'OBSERVING'].includes(parsedPhase)) ? 0
               : parsedPhase === 'HEALTHY' || parsedPhase === 'OBSERVING' ? (event.at || Date.now()) : current.readinessAt,
@@ -137,6 +144,22 @@ export default function App() {
     });
     return unsubscribe;
   }, []);
+
+  const latestSimulationEvent = state.events[state.events.length - 1];
+  useEffect(() => {
+    if (!latestSimulationEvent) return;
+    const scenario = state.scenarioApplied
+      ? { id: RESEARCH_SCENARIO_CATALOG[0].id, version: RESEARCH_SCENARIO_CATALOG[0].version }
+      : undefined;
+    dispatchResearch({
+      type: 'SIMULATION_EVENT',
+      eventKey: state.runId + ':' + latestSimulationEvent.id,
+      event: latestSimulationEvent,
+      at: Date.now(),
+      scenario
+    });
+  }, [latestSimulationEvent?.id, state.runId, state.scenarioApplied]);
+
 
   useEffect(() => {
     const handler = (event: Event) => {
