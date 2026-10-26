@@ -797,13 +797,29 @@ void handleUnoLine(char *line) {
     mode = GUARDIAN_NEGOTIATING;  // No observing/permit state before a valid heartbeat.
     Serial.println(F("[LINK] V3 handshake confirmed; waiting for first valid heartbeat."));
   } else if (!handshakeConfirmed) {
-    // One-way demo fallback: accept only a typed EVENT before handshake, and
-    // let handleEvent validate its exact schema and SIMULATED source. This
-    // allows the controlled integrity fixture to be demonstrated when the
-    // ESP32->UNO return wire is unavailable; it never grants ATM authority.
+    // One-way demo path: a typed, explicitly SIMULATED integrity fixture may
+    // trigger fail-closed revocation even when the return UART prevents the
+    // handshake. This is a software-generated fixture, not hardware proof.
     if (strcmp(type, "EVENT") == 0) {
-      Serial.println(F("[TEST] Pre-handshake EVENT received; validating controlled fixture only."));
-      handleEvent(payload, seq);
+      char eventName[24] = {0};
+      char source[24] = {0};
+      const char *const fixtureKeys[] = {"source", "event"};
+      const bool validFixture =
+          payloadHasExactKeys(payload, fixtureKeys, 2) &&
+          parsePayloadField(payload, "event", eventName, sizeof(eventName)) &&
+          parsePayloadField(payload, "source", source, sizeof(source)) &&
+          strcmp(source, "SIMULATED") == 0 &&
+          (strcmp(eventName, "PROFILE_MISMATCH") == 0 ||
+           strcmp(eventName, "PRIVILEGED_PATH") == 0 ||
+           strcmp(eventName, "SEQUENCE_DIVERGENCE") == 0);
+      if (validFixture) {
+        Serial.print(F("[DEMO] Pre-handshake simulated UART fixture received: "));
+        Serial.println(eventName);
+        Serial.println(F("[DEMO] No session established; transaction authority remains unavailable."));
+        revoke("Pre-handshake simulated integrity fixture; fail-closed demo revocation.");
+      } else {
+        revoke("Invalid or non-simulated EVENT before V3 handshake completion.");
+      }
     } else {
       revoke("UNO sent non-fixture traffic before V3 handshake completion.");
     }
