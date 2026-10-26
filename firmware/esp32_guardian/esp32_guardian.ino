@@ -634,13 +634,12 @@ void handleRequest(const char *payload) {
 }
 
 void handleUnoLine(char *line) {
-  // A latched revocation is terminal until both boards are reset. Never let a
-  // later HELLO overwrite REVOKED with NEGOTIATING.
-  if (revokeLatched) return;
-
   char fields[5][48] = {{0}};
   uint32_t seq = 0;
   if (!parseFrame(line, fields, seq)) {
+    // A latched revocation is terminal until both boards are reset. Never let
+    // later traffic restore authority or change REVOKED back to NEGOTIATING.
+    if (revokeLatched) return;
     // UART startup can expose a partial/noisy line before the first valid
     // session. Drop that pre-session noise; after session establishment,
     // malformed frames remain fail-closed and latch revocation.
@@ -657,6 +656,31 @@ void handleUnoLine(char *line) {
   const char *type = fields[1];
   const char *incomingSession = fields[2];
   const char *payload = fields[4];
+
+  // Demo-only evidence path: after revocation, accept only a valid, correctly
+  // sequenced, explicitly SIMULATED integrity fixture for display. This can
+  // never clear the revoke latch, establish a session, or grant a permit.
+  if (revokeLatched) {
+    if (sessionEstablished && strcmp(incomingSession, sessionId) == 0 &&
+        strcmp(type, "EVENT") == 0 && seq == lastUnoSequence + 1UL) {
+      char eventName[24] = {0};
+      char source[24] = {0};
+      const char *const fixtureKeys[] = {"source", "event"};
+      if (payloadHasExactKeys(payload, fixtureKeys, 2) &&
+          parsePayloadField(payload, "event", eventName, sizeof(eventName)) &&
+          parsePayloadField(payload, "source", source, sizeof(source)) &&
+          strcmp(source, "SIMULATED") == 0 &&
+          (strcmp(eventName, "PROFILE_MISMATCH") == 0 ||
+           strcmp(eventName, "PRIVILEGED_PATH") == 0 ||
+           strcmp(eventName, "SEQUENCE_DIVERGENCE") == 0)) {
+        lastUnoSequence = seq;
+        Serial.print(F("[DEMO] UART fixture event received after revocation: "));
+        Serial.println(eventName);
+        Serial.println(F("[DEMO] Guardian remains REVOKED; no permit or authority restored."));
+      }
+    }
+    return;
+  }
 
   if (!sessionEstablished) {
     if (strcmp(type, "HELLO") != 0 || strcmp(payload, "UNO-ATM-V3") != 0 || seq != 1) {
