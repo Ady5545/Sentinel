@@ -269,16 +269,65 @@ export default function App() {
     await window.sentinelDesktop.disconnectBoard(device);
     setBoards(previous => ({ ...previous, [device]: { ...previous[device], connected: false, path: '', sessionId: undefined, lastLineAt: 0, readinessAt: 0, phase: 'DISCONNECTED' } }));
   };
-  const sendBoardCommand = async (device: DeviceKey, command: string) => {
+  const sendBoardCommand = async (device: DeviceKey, command: BoardCommand) => {
     if (!window.sentinelDesktop) return { ok: false, error: 'Board commands require the installed desktop application.' };
-    const parts = command.split(' ');
-    const [name, ...args] = parts;
-    if (!name || parts.some(part => !part)) return { ok: false, error: 'Use a command name followed by single-space-separated arguments.' };
-    const response = await window.sentinelDesktop.sendBoardCommand({ device, command: { name, args } });
+    const response = await window.sentinelDesktop.sendBoardCommand({ device, command });
     setPortMessage(response.ok
-      ? (response.commandName || 'Command') + ' bytes were written to ' + device.toUpperCase() + '; this is not confirmation the board accepted the command.'
+      ? (response.commandName || command.name) + ' bytes were written to ' + device.toUpperCase() + '; this is not confirmation the board accepted the command.'
       : response.error || 'Board command write failed.');
     return response;
+  };
+
+  const switchResearchMode = async () => {
+    const nextMode: ResearchMode = research.mode === 'HIL' ? 'SIMULATION' : 'HIL';
+    const tx = research.hilTransaction;
+    if (tx && !['RECONCILED', 'DENIED', 'MISMATCH', 'REVOKED'].includes(tx.phase)) {
+      setPortMessage('Mode switch blocked: resolve or safely fault the current HIL transaction first.');
+      return;
+    }
+    if (nextMode === 'HIL' && (research.hilFaultLatched || research.hilShadow.status === 'RECONCILIATION REQUIRED')) {
+      setPortMessage('HIL mode blocked: reset both boards after the fault, clear the host fault latch, then recommission the RAM-only account and cassette.');
+      return;
+    }
+    const api = window.sentinelDesktop;
+    if (!api) {
+      setPortMessage('HIL mode is available only in the installed desktop app. The browser preview stays software-only.');
+      return;
+    }
+    try {
+      const hostMode = await api.setResearchMode(nextMode);
+      if (!hostMode.ok) {
+        setPortMessage(hostMode.error || 'The host rejected the requested research mode.');
+        return;
+      }
+      dispatchResearch({ type: 'SET_MODE', mode: nextMode, runId: createResearchRunId(nextMode), at: Date.now() });
+      setPortMessage(nextMode === 'HIL'
+        ? 'HIL mode enabled. Connect both boards, wait for fresh paired readiness, then commission the fictional account and cassette.'
+        : 'Software-only simulation mode restored. HIL-only serial commands are disabled at the host boundary.');
+    } catch (error) {
+      setPortMessage(error instanceof Error ? error.message : 'Research mode change failed.');
+    }
+  };
+
+  const clearHilRecord = async () => {
+    const api = window.sentinelDesktop;
+    if (research.hilFaultLatched) {
+      if (!canRecommissionHilShadow(research, nowMs)) {
+        setPortMessage('Fault remains latched until both boards reboot after the fault and fresh paired readiness returns.');
+        return;
+      }
+      if (!api) { setPortMessage('Fault clearance requires the installed desktop host.'); return; }
+      const hostClear = await api.clearHilFault();
+      if (!hostClear.ok) {
+        setPortMessage(hostClear.error || 'The host did not clear the HIL fault latch.');
+        return;
+      }
+      dispatchResearch({ type: 'CLEAR_HIL_FAULT', at: Date.now() });
+      setHilTransactionStartedAt(undefined);
+      setPortMessage('HIL fault cleared after the required paired reboot/readiness gate. The shadow is UNCOMMISSIONED until new board configuration reports arrive.');
+      return;
+    }
+    dispatchResearch({ type: 'CLEAR_TRANSACTION', at: Date.now() });
   };
 
   return <div className="sentinel-os">
