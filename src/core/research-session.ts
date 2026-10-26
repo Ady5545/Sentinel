@@ -58,7 +58,7 @@ type ParsedSerialKind = 'opened' | 'closed' | 'error' | 'line' | 'command-writte
 
 export type ResearchSessionAction =
   | { type: 'SET_MODE'; mode: ResearchMode; runId: string; at: number }
-  | { type: 'RESTORE_BRIDGE'; mode: ResearchMode; boards: Record<BoardDevice, { connected: boolean; sessionId?: string; phase: string; readinessAt: number }>; at: number }
+  | { type: 'RESTORE_BRIDGE'; mode: ResearchMode; boards: Record<BoardDevice, { connected: boolean; sessionId?: string; phase: string; readinessAt: number }>; hilFaultLatched: boolean; faultResetBaseline: HilBoardEpochs | null; boardBootEpochs: HilBoardEpochs; at: number }
   | { type: 'HIL_TIMEOUT'; at: number }
   | { type: 'CLEAR_TRANSACTION'; at: number }
   | {
@@ -289,7 +289,10 @@ export function researchSessionReducer(
       sentinel: readinessPhase.sentinel ? action.boards.sentinel.readinessAt : 0
     };
     const next: ResearchSessionState = {
-      ...state, mode: action.mode, boardSessions, readinessPhase, readinessAt
+      ...state, mode: action.mode, boardSessions, readinessPhase, readinessAt,
+      hilFaultLatched: action.hilFaultLatched,
+      faultResetBaseline: action.faultResetBaseline,
+      boardBootEpochs: { ...action.boardBootEpochs }
     };
     return appendRecord(next, action.at, 'HOST', 'BRIDGE_SNAPSHOT_RESTORED', 'HOST_DERIVED', {
       researchMode: action.mode,
