@@ -67,12 +67,16 @@ export function reduceStructuredHilTransaction(
 }
 
 export function parseKeyValueText(value: string): Record<string, string> {
-  return Object.fromEntries(value.split(';')
-    .map(part => {
-      const index = part.indexOf('=');
-      return index < 1 ? ['', ''] : [part.slice(0, index), part.slice(index + 1)];
-    })
-    .filter(([key]) => key));
+  const fields: Record<string, string> = Object.create(null) as Record<string, string>;
+  for (const part of value.split(';')) {
+    const index = part.indexOf('=');
+    if (index < 1 || index === part.length - 1 || part.indexOf('=', index + 1) !== -1) return {};
+    const key = part.slice(0, index);
+    const fieldValue = part.slice(index + 1);
+    if (!/^[a-z_]+$/i.test(key) || !/^[A-Za-z0-9_.,:-]+$/.test(fieldValue) || Object.prototype.hasOwnProperty.call(fields, key)) return {};
+    fields[key] = fieldValue;
+  }
+  return fields;
 }
 
 function mismatch(id: string, amount: number, message: string): HilTransaction {
@@ -258,7 +262,8 @@ export function redactSensitiveSerialText(line: string): string {
   return line
     .replace(/\bCHANGE_PIN\s+\d{4,6}\s+\d{4,6}\s+\d{4,6}\b/gi, 'CHANGE_PIN [REDACTED]')
     .replace(/\bADD_ACCOUNT\s+\S+\s+\d{4,6}\s+\S+\b/gi, 'ADD_ACCOUNT [REDACTED]')
-    .replace(/\bPIN\s+\d{4,6}\b/gi, 'PIN [REDACTED]');
+    .replace(/\bPIN\s+\d{4,6}\b/gi, 'PIN [REDACTED]')
+    .replace(/\b(pin|old_pin|new_pin)=\d{4,6}\b/gi, '$1=[REDACTED]');
 }
 
 
@@ -335,8 +340,9 @@ export function reduceHilShadowObservation(state: HilShadowState, line: string):
     if (!fields.card || balance === null) {
       return { ...state, status: 'RECONCILIATION REQUIRED', error: 'Uno reported malformed account-provisioning evidence.' };
     }
-    if (state.committedTransactionIds.length > 0 && state.accountId !== fields.card) {
-      return { ...state, status: 'RECONCILIATION REQUIRED', error: 'The single-account desktop HIL shadow cannot switch accounts after committed withdrawals in the same run.' };
+    if (state.committedTransactionIds.length > 0 &&
+        (state.accountId !== fields.card || state.accountBalance !== balance)) {
+      return { ...state, status: 'RECONCILIATION REQUIRED', error: 'Account identity or balance was reprovisioned after a committed HIL withdrawal; desktop shadow changes are frozen.' };
     }
     if (state.status === 'RECONCILIATION REQUIRED') return state;
     return { ...state, status: state.cassetteConfigured ? 'COMMISSIONED' : 'UNCOMMISSIONED',
@@ -356,6 +362,11 @@ export function reduceHilShadowObservation(state: HilShadowState, line: string):
     const reportedTotal = finiteInteger(fields.total, 100000000);
     if (reportedTotal === null || total !== reportedTotal) {
       return { ...state, status: 'RECONCILIATION REQUIRED', error: 'Reported cassette total does not equal the denomination count total.' };
+    }
+    if (state.committedTransactionIds.length > 0 && state.cassetteConfigured &&
+        (state.noteCounts.notes500 !== counts.notes500 || state.noteCounts.notes200 !== counts.notes200 ||
+         state.noteCounts.notes100 !== counts.notes100 || state.noteCounts.notes50 !== counts.notes50)) {
+      return { ...state, status: 'RECONCILIATION REQUIRED', error: 'Cassette inventory was reset or changed after a committed HIL withdrawal; desktop shadow changes are frozen.' };
     }
     if (state.status === 'RECONCILIATION REQUIRED') return state;
     return { ...state, status: state.accountConfigured ? 'COMMISSIONED' : 'UNCOMMISSIONED',
