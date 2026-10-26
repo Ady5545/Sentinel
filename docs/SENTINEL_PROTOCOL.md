@@ -61,12 +61,12 @@ The Arduino Uno peer link now uses **AltSoftSerial** on fixed D8 RX / D9 TX pins
 
 1. The Uno sends **at most one** `HEARTBEAT`.
 2. The Uno marks that heartbeat as outstanding and sends no second heartbeat while it is outstanding.
-3. The ESP32 validates the heartbeat and schedules `STATUS|HEALTHY` after a 100 ms turnaround.
+3. The ESP32 validates the heartbeat and schedules `STATUS|HEALTHY` after a 100 ms turnaround. The ESP32 flushes its UART after the complete STATUS frame before reporting local transmit completion; this is not a peer acknowledgement.
 4. The ESP32 makes at most three total transmissions of that same STATUS frame, reusing the same sequence number and spacing retries by 250 ms. It does not send unsolicited or periodic STATUS frames.
 5. The Uno clears the outstanding-heartbeat flag only after receiving and validating a STATUS. It ignores an exact duplicate of the most recently accepted HEALTHY STATUS only within a 600 ms retry window, without refreshing freshness or advancing the sequence.
 6. The Uno may then send the next heartbeat after the normal heartbeat interval. If initial STATUS frames are malformed, the Uno drops at most three while still withholding freshness and permits; malformed traffic outside that startup allowance remains fail-closed. If no valid STATUS arrives, guardian timeout locks the controller.
 
-This scheduling rule is deliberately an application-layer turn-taking mechanism rather than a relaxation of sequence validation. AltSoftSerial improves timing but does not replace correct voltage-level translation or physical bench validation. STATUS is liveness evidence only and is never a transaction permit.
+This scheduling rule is deliberately an application-layer turn-taking mechanism rather than a relaxation of sequence validation. AltSoftSerial improves timing but does not replace correct voltage-level translation or physical bench validation. The Uno's `[UART_DIAG]` reports bounded receive byte/line counts and last-byte/last-line ages; these counters help localize transport loss but do not validate a frame. STATUS is liveness evidence only and is never a transaction permit.
 
 The ESP32 sends `STATUS|HEALTHY` only in response to a validated UNO heartbeat. Bounded retries reuse the same sequence and are not independent liveness evidence; the ESP32 does not send unsolicited or periodic STATUS frames. A missing/invalid heartbeat or protocol timeout still fails closed. CRC detects accidental corruption, not malicious forgery.
 

@@ -41,9 +41,9 @@ Implement this plan in small reviewable phases. Do not replace both firmware fil
 ### Confirmed code facts behind the latest UART-status failure
 
 - Current V3 firmware uses 4800 baud, 8N1 on the peer link; HELLO retries reuse sequence 1 and the handshake is explicitly completed by a final ACK.
-- The latest paired-board logs show handshake completion and a valid Uno heartbeat arriving at the ESP32; the ESP32 schedules/sends HEALTHY STATUS, while the Uno reports malformed/corrupted guardian frames rather than accepting that status.
+- The latest paired-board logs show handshake completion and a valid Uno heartbeat arriving at the ESP32; the ESP32 schedules/sends HEALTHY STATUS, while the Uno does not log an accepted HEALTHY status. The current diagnostic patch adds Uno receive-byte/complete-line counters and flushes the ESP32 UART after STATUS transmit.
 - An ESP32 `sendFrame_return=true` means the UART write was accepted locally; it does not prove the Uno received a valid frame.
-- This update replaces basic SoftwareSerial with AltSoftSerial on fixed D8 RX / D9 TX and lengthens response/retry spacing to give the AVR receiver a more tolerant window.
+- The current V3.3 transport uses AltSoftSerial on fixed D8 RX / D9 TX; the response/retry schedule is bounded. Receiver-side byte/line counts are needed to distinguish no signal, incomplete framing, and parser rejection.
 - The equal 2.2 kΩ / 2.2 kΩ divider previously described gives roughly 2.5 V at ESP32 RX from a 5 V Uno TX, leaving almost no margin above the ESP32's specified minimum HIGH threshold. It is not a robust level-shifting design; a proper level shifter or correctly calculated divider is preferred.
 
 **Not yet proven:** the exact cause is not established from logs alone. UART timing and input signal margin are plausible contributors; only the next paired-board test can confirm whether this firmware and the actual electrical link are stable.

@@ -106,6 +106,12 @@ char sessionId[13] = {0};
 char rxBuffer[FRAME_MAX];
 size_t rxLength = 0;
 bool droppingLongFrame = false;
+// Receiver diagnostics distinguish no signal, an incomplete line, and parser rejection.
+uint32_t guardianRxByteCount = 0;
+uint32_t guardianRxLineCount = 0;
+uint32_t guardianLastByteAt = 0;
+uint32_t guardianLastLineAt = 0;
+uint32_t guardianLastDiagAt = 0;
 char usbBuffer[USB_LINE_MAX];
 size_t usbLength = 0;
 bool droppingUsbLine = false;
@@ -684,7 +690,11 @@ void handleGuardianLine(char *line) {
 void pollGuardian() {
   while (GuardianSerial.available()) {
     const char c = (char)GuardianSerial.read();
+    ++guardianRxByteCount;
+    guardianLastByteAt = millis();
     if (c == '\n') {
+      ++guardianRxLineCount;
+      guardianLastLineAt = millis();
       if (!droppingLongFrame && rxLength > 0) {
         rxBuffer[rxLength] = '\0';
         handleGuardianLine(rxBuffer);
@@ -1113,10 +1123,26 @@ void setup() {
   lastHelloAt = handshakeStartedAt;
 }
 
+void printGuardianUartDiagnostics(uint32_t now) {
+  if ((uint32_t)(now - guardianLastDiagAt) < 2000UL) return;
+  guardianLastDiagAt = now;
+  Serial.print(F("[UART_DIAG] rx_bytes="));
+  Serial.print(guardianRxByteCount);
+  Serial.print(F(" rx_lines="));
+  Serial.print(guardianRxLineCount);
+  Serial.print(F(" byte_age_ms="));
+  Serial.print(guardianLastByteAt ? (uint32_t)(now - guardianLastByteAt) : 0xFFFFFFFFUL);
+  Serial.print(F(" line_age_ms="));
+  Serial.print(guardianLastLineAt ? (uint32_t)(now - guardianLastLineAt) : 0xFFFFFFFFUL);
+  Serial.print(F(" awaiting_status="));
+  Serial.println(awaitingGuardianStatus ? F("yes") : F("no"));
+}
+
 void loop() {
   const uint32_t now = millis();
   pollGuardian();
   pollUsb();
+  printGuardianUartDiagnostics(now);
 
   if (!handshakeComplete && !guardianRevokeLatched &&
       (uint32_t)(now - handshakeStartedAt) >= HANDSHAKE_TIMEOUT_MS) {

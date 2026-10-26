@@ -146,6 +146,11 @@ bool sendFrameAtSequence(const char *type, const char *payload, uint32_t seq) {
   snprintf(crcText, sizeof(crcText), "%04X", crc);
   Serial2.print(crcText);
   Serial2.print('\n');
+  // Local completion only: this does not prove the Uno accepted the frame.
+  if (strcmp(type, "STATUS") == 0) {
+    Serial2.flush();
+    Serial.println(F("[STATUS_TX] UART flush completed; peer acceptance still unconfirmed."));
+  }
   return true;
 }
 
@@ -344,9 +349,8 @@ void handleHeartbeat(const char *payload) {
   }
   heartbeatSeen = true;
   lastHeartbeatAt = millis();
-  // Do not reply from inside the RX parser. The Uno uses SoftwareSerial, whose
-  // transmit path temporarily disables RX interrupts. A reply sent immediately
-  // after its final heartbeat byte can collide with the tail of that transmit.
+  // Do not reply from inside the RX parser. Keep a bounded turnaround so the
+  // Uno's AltSoftSerial peer link finishes its heartbeat receive turn first.
   // Schedule a short, non-blocking turnaround so the Uno is listening again.
   if (!revokeLatched) {
     pendingHealthyStatus = true;
@@ -730,9 +734,9 @@ void loop() {
   pollUsb();
   const uint32_t now = millis();
 
-  // Defer STATUS until the Uno's SoftwareSerial transmitter has returned to
-  // receive mode. If a frame is corrupted/lost, retry the identical sequence
-  // a bounded number of times. The Uno ignores only exact, recent duplicates.
+  // Defer STATUS until the Uno has finished the heartbeat send/receive turn.
+  // If a frame is corrupted/lost, retry the identical sequence. The Uno ignores
+  // only exact, recent duplicates.
   if (pendingHealthyStatus &&
       (int32_t)(now - healthyStatusDueAt) >= 0) {
     if (!revokeLatched && handshakeConfirmed && healthyStatusSequence != 0) {
