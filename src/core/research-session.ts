@@ -178,6 +178,8 @@ export function reduceResearchRun(run: ResearchRunRecord, action: ResearchAction
 
   if (action.type === 'UNO_COMMIT') {
     const tx = run.activeTransaction;
+    if (tx && tx.phase === 'RECONCILED' && run.processedTransactionIds.includes(tx.id) &&
+        tx.id === action.transactionId && tx.amount === action.amount && tx.postCommitBalance === action.balance) return run;
     if (!tx || !tx.permitSeen || tx.id !== action.transactionId || tx.amount !== action.amount ||
         !Number.isSafeInteger(action.balance) || action.balance < 0 ||
         !['PERMITTED', 'RECONCILED'].includes(tx.phase)) {
@@ -190,6 +192,8 @@ export function reduceResearchRun(run: ResearchRunRecord, action: ResearchAction
 
   if (action.type === 'GUARDIAN_ACK') {
     const tx = run.activeTransaction;
+    if (tx && tx.phase === 'RECONCILED' && run.processedTransactionIds.includes(tx.id) &&
+        tx.id === action.transactionId && tx.amount === action.amount) return run;
     if (!tx || !tx.permitSeen || tx.id !== action.transactionId || tx.amount !== action.amount ||
         !['PERMITTED', 'UNO_COMMITTED', 'RECONCILED'].includes(tx.phase)) {
       return mismatch(run, action.transactionId, action.amount, 'Guardian ACK did not match the permitted transaction by ID and amount.', at, 'SENTINEL');
