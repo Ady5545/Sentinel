@@ -151,6 +151,27 @@ describe('coordinated research session', () => {
     expect(s.records.at(-1)?.kind).toBe('HIL_SHADOW_RESET');
   });
 
+  it('does not reuse a commissioned HIL shadow across a new run or mode switch', () => {
+    const commissioned = readyCommissionedSession();
+    expect(commissioned.hilShadow.status).toBe('COMMISSIONED');
+
+    const simulation = researchSessionReducer(commissioned, {
+      type: 'SET_MODE', mode: 'SIMULATION', runId: 'RUN-SIM-AFTER-HIL', at: 400
+    });
+    expect(simulation.mode).toBe('SIMULATION');
+    expect(simulation.hilShadow.status).toBe('UNCOMMISSIONED');
+    expect(simulation.records.at(-2)?.kind).toBe('RUN_ENDED');
+    expect(simulation.records.at(-2)?.details.finalShadowStatus).toBe('COMMISSIONED');
+
+    const newHilRun = researchSessionReducer(simulation, {
+      type: 'SET_MODE', mode: 'HIL', runId: 'RUN-HIL-NEW', at: 500
+    });
+    expect(newHilRun.mode).toBe('HIL');
+    expect(newHilRun.runId).toBe('RUN-HIL-NEW');
+    expect(newHilRun.hilShadow.status).toBe('UNCOMMISSIONED');
+    expect(newHilRun.hilShadow.committedTransactionIds).toEqual([]);
+  });
+
   it('keeps records append-only, versioned and replayable by run ID', () => {
     let s = createInitialResearchSession('RUN-SIM-1', 10, 'SIMULATION');
     const earlierRecords = s.records;
