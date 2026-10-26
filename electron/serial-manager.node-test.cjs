@@ -144,6 +144,7 @@ test('fragmented input, concatenated lines and CRLF are framed correctly', async
 test('connection alone is never pair readiness and protected commands fail closed', async () => {
   const h = makeHarness();
   const pair = await h.connectPair();
+  h.manager.setResearchMode('HIL');
   assert.equal(h.manager.isPairReady(), false);
   await assert.rejects(
     h.manager.writeCommand('uno', { name: 'WITHDRAW', args: ['500'] }),
@@ -159,6 +160,7 @@ test('connection alone is never pair readiness and protected commands fail close
 test('readiness expires at the host gate even if unrelated console text keeps arriving', async () => {
   const h = makeHarness();
   const pair = await h.connectPair();
+  h.manager.setResearchMode('HIL');
   await h.markPairReady();
   h.advance(3400);
   pair.uno.feed('[INFO] unrelated diagnostic\n');
@@ -217,6 +219,7 @@ test('unplug invalidates the session and pair readiness immediately', async () =
 test('write failures redact diagnostics, clear readiness and release the connection', async () => {
   const h = makeHarness();
   const pair = await h.connectPair();
+  h.manager.setResearchMode('HIL');
   await h.markPairReady();
   pair.uno.writeError = new Error('synthetic failure carrying PIN 4826');
   await assert.rejects(h.manager.writeCommand('uno', { name: 'BALANCE', args: [] }), /Serial write failed/);
@@ -229,6 +232,7 @@ test('write failures redact diagnostics, clear readiness and release the connect
 test('PIN-bearing commands never place their values in command diagnostics', async () => {
   const h = makeHarness();
   const pair = await h.connectPair();
+  h.manager.setResearchMode('HIL');
   await h.markPairReady();
   await h.manager.writeCommand('uno', { name: 'PIN', args: ['4826'] });
   const commandEvent = h.emitted.find(event => event.kind === 'command-written');
@@ -270,7 +274,7 @@ test('HIL-only setup and customer commands require explicit host mode plus fresh
 test('HIL-only commands still fail closed in HIL mode when the paired reports are stale', async () => {
   const h = makeHarness();
   await h.connectPair();
-  await h.manager.setResearchMode('HIL');
+  h.manager.setResearchMode('HIL');
   await assert.rejects(
     h.manager.writeCommand('uno', { name: 'ADD_ACCOUNT', args: ['CARD01', '4826', '50000'] }),
     /fresh HEALTHY\/OBSERVING/
