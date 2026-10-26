@@ -151,7 +151,7 @@ describe('ATM customer state machine', () => {
 
   it('treats the exact expiry instant as expired', () => {
     const state = {
-      ...initialAtmState('protected'), screen: 'pending' as const, authenticated: true, service: 'withdrawal' as const,
+      ...initialAtmState('protected'), runId: 'RUN-1', screen: 'pending' as const, authenticated: true, service: 'withdrawal' as const,
       pendingWithdrawal: { id: 'TX-EDGE', amount: 1000, requestedAtMs: 1 },
       simulationPermit: { id: 'P-EDGE', runId: 'RUN-1', transactionId: 'TX-EDGE', amount: 1000, issuedAtMs: 1, expiresAtMs: 10, evidenceSource: 'SIMULATED' as const },
       lastDecision: 'PERMIT' as const
