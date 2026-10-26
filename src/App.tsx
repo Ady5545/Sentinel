@@ -94,7 +94,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!['sending', 'awaiting-uno', 'fixture-injected'].includes(attackDemo.phase)) return;
+    if (!['sending', 'awaiting-uno', 'fixture-injected', 'guardian-revoked'].includes(attackDemo.phase)) return;
     if (!attackDemo.startedAt || nowMs - attackDemo.startedAt < 14000) return;
     setAttackDemo(previous => {
       if (!['sending', 'awaiting-uno', 'fixture-injected'].includes(previous.phase)) return previous;
@@ -651,8 +651,8 @@ function ExperimentView({ boards, pairReady, attackDemo, nowMs, onNavigate, onRu
   serialEvents: string[];
 }) {
   const [guideOpen, setGuideOpen] = useState(true);
-  const unoHit = ['fixture-injected', 'guardian-revoked', 'controller-locked'].includes(attackDemo.phase);
-  const guardianRevoked = ['guardian-revoked', 'controller-locked'].includes(attackDemo.phase) || boards.sentinel.phase === 'REVOKED';
+  const unoHit = Boolean(attackDemo.unoEvidence) || ['fixture-injected', 'guardian-revoked', 'controller-locked'].includes(attackDemo.phase);
+  const guardianRevoked = Boolean(attackDemo.sentinelEvidence) || ['guardian-revoked', 'controller-locked'].includes(attackDemo.phase) || boards.sentinel.phase === 'REVOKED';
   const attackPending = ['sending', 'awaiting-uno', 'fixture-injected', 'guardian-revoked'].includes(attackDemo.phase);
   const canAttack = pairReady && researchMode === 'HIL' && researchPhase === 'ACTIVE' && !attackPending;
   const phaseLabel: Record<HardwareAttackPhase, string> = {
