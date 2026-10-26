@@ -521,8 +521,10 @@ void handleGuardianLine(char *line) {
     if (guardianRevokeLatched) return;
     guardianLink = LINK_OBSERVING;
   } else if (STREQ(type, "PERMIT")) {
-    if (!guardianFresh() || atmState != ATM_WITHDRAW_PENDING || !transactionIdMatches(payload)) {
-      enterGuardianLock(F("Permit missing freshness or did not match the pending transaction."));
+    if (!guardianFresh() || atmState != ATM_WITHDRAW_PENDING ||
+        (uint32_t)(millis() - txPendingStartedAt) > transactionDecisionTimeoutMs ||
+        !transactionIdMatches(payload)) {
+      enterGuardianLock(F("Permit stale or not matched to the pending transaction."));
       return;
     }
     completeWithdrawal();
