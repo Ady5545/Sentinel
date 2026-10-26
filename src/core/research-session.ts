@@ -39,7 +39,7 @@ export interface ResearchRunRecord {
   readonly boardSessions: Readonly<{ uno: string | null; sentinel: string | null }>;
   readonly activeTransaction: ResearchTransaction | null;
   readonly processedTransactionIds: readonly string[];
-  readonly shadowUpdateCount: number;
+  readonly correlatedCommitCount: number;
   readonly freezeReason: string | null;
   readonly events: readonly ResearchEvent[];
 }
@@ -60,7 +60,7 @@ export function createResearchRun(runId: string, mode: ResearchMode, at = new Da
   return {
     schemaVersion: RESEARCH_RUN_SCHEMA_VERSION, runId, mode, phase: 'ACTIVE', startedAt: at,
     boardSessions: { uno: null, sentinel: null }, activeTransaction: null,
-    processedTransactionIds: [], shadowUpdateCount: 0, freezeReason: null, events: []
+    processedTransactionIds: [], correlatedCommitCount: 0, freezeReason: null, events: []
   };
 }
 
@@ -222,7 +222,7 @@ function maybeReconcile(run: ResearchRunRecord, at: string): ResearchRunRecord {
   return appendEvent({
     ...run,
     processedTransactionIds: [...run.processedTransactionIds, tx.id],
-    shadowUpdateCount: run.shadowUpdateCount + 1
+    correlatedCommitCount: run.correlatedCommitCount + 1
   }, 'SYSTEM', 'HIL_RECONCILED', 'Exact permit, Uno commit and guardian ACK correlated; desktop shadow may apply this transaction exactly once.', 'HOST_DERIVED', at, tx.id, tx.amount);
 }
 
