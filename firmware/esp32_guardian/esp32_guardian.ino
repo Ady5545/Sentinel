@@ -1,5 +1,5 @@
 /*
- * SENTINEL ESP32 Independent Guardian Firmware v3
+ * SENTINEL ESP32 Independent Guardian Firmware v3.4
  * Target: ESP32 Dev Module
  * UART2: RX=GPIO16, TX=GPIO17, 4800 8N1
  * USB diagnostics/operator configuration: Serial at 115200
@@ -55,6 +55,7 @@ uint32_t lastStatusAt = 0;
 bool pendingHealthyStatus = false;
 uint32_t healthyStatusDueAt = 0;
 uint32_t healthyStatusSequence = 0;
+uint32_t healthyStatusAckSequence = 0;
 uint8_t healthyStatusAttempts = 0;
 static const uint32_t HEALTHY_STATUS_TURNAROUND_MS = 100UL;
 static const uint32_t HEALTHY_STATUS_RETRY_MS = 250UL;
@@ -216,20 +217,55 @@ bool parsePayloadField(const char *payload, const char *key, char *out, size_t o
   if (!payload || !key || !out || outSize < 2) return false;
   const size_t keyLen = strlen(key);
   const char *cursor = payload;
+  bool found = false;
   while (*cursor) {
     const char *end = strchr(cursor, ';');
     const size_t tokenLen = end ? (size_t)(end - cursor) : strlen(cursor);
-    if (tokenLen > keyLen && strncmp(cursor, key, keyLen) == 0 && cursor[keyLen] == '=') {
+    const char *equals = (const char *)memchr(cursor, '=', tokenLen);
+    if (tokenLen == 0 || !equals || equals == cursor || equals >= cursor + tokenLen - 1 ||
+        memchr(equals + 1, '=', (size_t)((cursor + tokenLen) - (equals + 1))) != NULL) return false;
+    if ((size_t)(equals - cursor) == keyLen && strncmp(cursor, key, keyLen) == 0) {
+      if (found) return false;
       const size_t valueLen = tokenLen - keyLen - 1;
-      if (valueLen == 0 || valueLen >= outSize) return false;
-      memcpy(out, cursor + keyLen + 1, valueLen);
+      if (valueLen >= outSize) return false;
+      memcpy(out, equals + 1, valueLen);
       out[valueLen] = '\0';
-      return true;
+      found = true;
     }
     if (!end) break;
     cursor = end + 1;
+    if (!*cursor) return false;
   }
-  return false;
+  return found;
+}
+
+bool payloadHasExactKeys(const char *payload, const char *const *keys, uint8_t keyCount) {
+  if (!payload || !payload[0] || !keys || keyCount == 0 || keyCount > 8) return false;
+  uint16_t seen = 0;
+  const char *cursor = payload;
+  while (*cursor) {
+    const char *end = strchr(cursor, ';');
+    const size_t tokenLen = end ? (size_t)(end - cursor) : strlen(cursor);
+    const char *equals = (const char *)memchr(cursor, '=', tokenLen);
+    if (tokenLen == 0 || !equals || equals == cursor || equals >= cursor + tokenLen - 1 ||
+        memchr(equals + 1, '=', (size_t)((cursor + tokenLen) - (equals + 1))) != NULL) return false;
+    uint8_t match = keyCount;
+    const size_t keyLen = (size_t)(equals - cursor);
+    for (uint8_t i = 0; i < keyCount; ++i) {
+      if (strlen(keys[i]) == keyLen && strncmp(cursor, keys[i], keyLen) == 0) {
+        match = i;
+        break;
+      }
+    }
+    if (match == keyCount) return false;
+    const uint16_t bit = (uint16_t)(1U << match);
+    if (seen & bit) return false;
+    seen |= bit;
+    if (!end) break;
+    cursor = end + 1;
+    if (!*cursor) return false;
+  }
+  return seen == (uint16_t)((1U << keyCount) - 1U);
 }
 
 bool stateNameValid(const char *state) {
@@ -299,6 +335,11 @@ void denyRequest(const char *id, const char *reason) {
 }
 
 void handleState(const char *payload) {
+  const char *const stateKeys[] = {"atm", "auth", "tx"};
+  if (!payloadHasExactKeys(payload, stateKeys, 3)) {
+    revoke("STATE payload contains missing, duplicate, or unknown fields.");
+    return;
+  }
   char nextState[24];
   char authText[4];
   char txText[12];
@@ -336,7 +377,12 @@ void handleState(const char *payload) {
   reportedAuthenticated = auth;
 }
 
-void handleHeartbeat(const char *payload) {
+void handleHeartbeat(const char *payload, uint32_t heartbeatSequence) {
+  const char *const heartbeatKeys[] = {"state", "up"};
+  if (!payloadHasExactKeys(payload, heartbeatKeys, 2)) {
+    revoke("HEARTBEAT payload contains missing, duplicate, or unknown fields.");
+    return;
+  }
   char state[24];
   char uptimeText[16];
   uint32_t uptime = 0;
@@ -354,6 +400,7 @@ void handleHeartbeat(const char *payload) {
   // Schedule a short, non-blocking turnaround so the Uno is listening again.
   if (!revokeLatched) {
     pendingHealthyStatus = true;
+    healthyStatusAckSequence = heartbeatSequence;
     healthyStatusSequence = (txSequence == 0xFFFFFFFFUL) ? 0 : txSequence + 1UL;
     healthyStatusAttempts = 0;
     healthyStatusDueAt = lastHeartbeatAt + HEALTHY_STATUS_TURNAROUND_MS;
@@ -365,14 +412,41 @@ void handleHeartbeat(const char *payload) {
 }
 
 void handleEvent(const char *payload) {
-  if (strstr(payload, "source=SIMULATED") != NULL &&
-      (strstr(payload, "PROFILE_MISMATCH") != NULL ||
-       strstr(payload, "PRIVILEGED_PATH") != NULL ||
-       strstr(payload, "SEQUENCE_DIVERGENCE") != NULL)) {
+  char eventName[24];
+  char source[24];
+  char id[12];
+  char amountText[12];
+  char countText[8];
+  if (!parsePayloadField(payload, "event", eventName, sizeof(eventName))) {
+    revoke("EVENT payload has no unique typed event code.");
+    return;
+  }
+
+  if (strcmp(eventName, "PROFILE_MISMATCH") == 0 ||
+      strcmp(eventName, "PRIVILEGED_PATH") == 0 ||
+      strcmp(eventName, "SEQUENCE_DIVERGENCE") == 0) {
+    const char *const fixtureKeys[] = {"source", "event"};
+    if (!payloadHasExactKeys(payload, fixtureKeys, 2) ||
+        !parsePayloadField(payload, "source", source, sizeof(source)) ||
+        strcmp(source, "SIMULATED") != 0) {
+      revoke("Malformed or incorrectly labelled synthetic fixture event.");
+      return;
+    }
     revoke("Configured simulated integrity-violation fixture received.");
     return;
   }
-  if (strstr(payload, "event=PIN_FAIL") != NULL) {
+
+  if (strcmp(eventName, "PIN_FAIL") == 0) {
+    const char *const pinFailKeys[] = {"source", "event", "count"};
+    uint32_t reportedCount = 0;
+    if (!payloadHasExactKeys(payload, pinFailKeys, 3) ||
+        !parsePayloadField(payload, "source", source, sizeof(source)) ||
+        strcmp(source, "BOARD_REPORTED") != 0 ||
+        !parsePayloadField(payload, "count", countText, sizeof(countText)) ||
+        !parseUnsigned(countText, 255UL, reportedCount) || reportedCount == 0) {
+      revoke("Malformed board-reported PIN_FAIL event.");
+      return;
+    }
     const uint32_t now = millis();
     if ((uint32_t)(now - pinFailureWindowStartedAt) > pinFailureWindowMs) {
       pinFailureWindowStartedAt = now;
@@ -383,26 +457,26 @@ void handleEvent(const char *payload) {
       revoke("Independent guardian PIN-failure rate threshold exceeded.");
       return;
     }
+    return;
   }
-  if (strstr(payload, "event=PIN_OK") != NULL) {
-    // Successful authentication is an observation, not proof that the UNO is honest.
-    Serial.println(F("[OBSERVE] UNO reports successful demo PIN verification."));
-  }
-  if (strstr(payload, "event=UNKNOWN_CARD") != NULL)
-    Serial.println(F("[OBSERVE] Unknown demo card was reported by UNO."));
-  if (strstr(payload, "id=") != NULL && awaitingCommit) {
-    char id[12], amountText[12];
+
+  if (strcmp(eventName, "TX_COMMITTED") == 0) {
+    const char *const commitKeys[] = {"event", "id", "amount"};
     uint32_t amount = 0;
-    if (!parsePayloadField(payload, "id", id, sizeof(id)) ||
+    if (!payloadHasExactKeys(payload, commitKeys, 3) ||
+        !parsePayloadField(payload, "id", id, sizeof(id)) ||
         !parsePayloadField(payload, "amount", amountText, sizeof(amountText)) ||
-        strcmp(id, pendingPermitId) != 0 ||
         !parseUnsigned(amountText, 1000000UL, amount) ||
+        !awaitingCommit || strcmp(id, pendingPermitId) != 0 ||
         amount != pendingPermitAmount) {
-      revoke("Transaction commit did not match one-shot guardian permit.");
+      revoke("TX_COMMITTED did not match the one-shot guardian permit.");
       return;
     }
-    // Print the exact ID and amount the guardian matched before clearing its pending permit.
-    Serial.print(F("[AUDIT] Matching controller-reported virtual transaction commit observed id="));
+    if (committedTransactions == 0xFFFFFFFFUL) {
+      revoke("Guardian commit counter exhausted; clean paired restart required.");
+      return;
+    }
+    Serial.print(F("[RECONCILE] Matching controller-reported virtual commit id="));
     Serial.print(pendingPermitId);
     Serial.print(F(";amount="));
     Serial.println(pendingPermitAmount);
@@ -410,10 +484,35 @@ void handleEvent(const char *payload) {
     pendingPermitId[0] = '\0';
     pendingPermitAmount = 0;
     ++committedTransactions;
+    return;
   }
+
+  if (strcmp(eventName, "PIN_OK") == 0 || strcmp(eventName, "UNKNOWN_CARD") == 0 ||
+      strcmp(eventName, "CARD_ACCEPTED") == 0 || strcmp(eventName, "PIN_CHANGED") == 0) {
+    const char *const observeKeys[] = {"source", "event"};
+    if (!payloadHasExactKeys(payload, observeKeys, 2) ||
+        !parsePayloadField(payload, "source", source, sizeof(source)) ||
+        strcmp(source, "BOARD_REPORTED") != 0) {
+      revoke("Malformed board-reported observation event.");
+      return;
+    }
+    if (strcmp(eventName, "PIN_OK") == 0) {
+      Serial.println(F("[OBSERVE] UNO reports successful demo PIN verification."));
+    } else if (strcmp(eventName, "UNKNOWN_CARD") == 0) {
+      Serial.println(F("[OBSERVE] Unknown demo card was reported by UNO."));
+    }
+    return;
+  }
+
+  revoke("Unknown UNO EVENT code.");
 }
 
 void handleRequest(const char *payload) {
+  const char *const requestKeys[] = {"id", "amount"};
+  if (!payloadHasExactKeys(payload, requestKeys, 2)) {
+    revoke("REQUEST payload contains missing, duplicate, or unknown fields.");
+    return;
+  }
   char id[12];
   char amountText[12];
   uint32_t amount = 0;
@@ -468,7 +567,10 @@ void handleRequest(const char *payload) {
   awaitingCommit = true;
   char permitPayload[20];
   snprintf(permitPayload, sizeof(permitPayload), "id=%s", id);
-  sendFrame("PERMIT", permitPayload);
+  if (!sendFrame("PERMIT", permitPayload)) {
+    Serial.println(F("[FAULT] PERMIT transmission failed; no successful send is asserted."));
+    return;
+  }
   Serial.print(F("[PERMIT] One-shot observation issued for "));
   Serial.print(id);
   Serial.print(F("; amount="));
@@ -582,7 +684,7 @@ void handleUnoLine(char *line) {
   } else if (strcmp(type, "STATE") == 0) {
     handleState(payload);
   } else if (strcmp(type, "HEARTBEAT") == 0) {
-    handleHeartbeat(payload);
+    handleHeartbeat(payload, seq);
     if (!revokeLatched && heartbeatSeen) mode = GUARDIAN_OBSERVING;
   } else if (strcmp(type, "REQUEST") == 0) {
     handleRequest(payload);
@@ -594,8 +696,11 @@ void handleUnoLine(char *line) {
 }
 
 void pollUno() {
-  while (Serial2.available()) {
+  uint8_t bytesProcessed = 0;
+  static const uint8_t MAX_PEER_RX_BYTES_PER_LOOP = 64;
+  while (Serial2.available() && bytesProcessed < MAX_PEER_RX_BYTES_PER_LOOP) {
     const char c = (char)Serial2.read();
+    ++bytesProcessed;
     if (c == '\n') {
       if (!droppingLongFrame && rxLength > 0) {
         rxBuffer[rxLength] = '\0';
@@ -727,7 +832,7 @@ void setup() {
   budgetWindowStartedAt = millis();
   pinFailureWindowStartedAt = millis();
   Serial.println();
-  Serial.println(F("SENTINEL ESP32 GUARDIAN V3.3 READY"));
+  Serial.println(F("SENTINEL ESP32 GUARDIAN V3.4 READY"));
   Serial.println(F("Claims: protocol/state policy observation only; no secure element or physical interlock."));
   Serial.println(F("UART2: RX GPIO16 / TX GPIO17 / 4800 8N1"));
   Serial.println(F("Type HELP for local RAM policy commands."));
@@ -744,13 +849,23 @@ void loop() {
   if (pendingHealthyStatus &&
       (int32_t)(now - healthyStatusDueAt) >= 0) {
     if (!revokeLatched && handshakeConfirmed && healthyStatusSequence != 0) {
+      char statusPayload[40];
+      const int statusPayloadLength = snprintf(statusPayload, sizeof(statusPayload),
+          "HEALTHY;ack_seq=%lu", (unsigned long)healthyStatusAckSequence);
+      if (statusPayloadLength <= 0 || (size_t)statusPayloadLength >= sizeof(statusPayload)) {
+        pendingHealthyStatus = false;
+        revoke("STATUS acknowledgement payload overflow.");
+        return;
+      }
       Serial.print(F("[STATUS_TX] Attempt "));
       Serial.print((uint8_t)(healthyStatusAttempts + 1));
       Serial.print('/');
       Serial.print(HEALTHY_STATUS_MAX_ATTEMPTS);
-      Serial.print(F(" STATUS HEALTHY seq="));
+      Serial.print(F(" STATUS ack_seq="));
+      Serial.print(healthyStatusAckSequence);
+      Serial.print(F(" seq="));
       Serial.println(healthyStatusSequence);
-      const bool sent = sendFrameAtSequence("STATUS", "HEALTHY", healthyStatusSequence);
+      const bool sent = sendFrameAtSequence("STATUS", statusPayload, healthyStatusSequence);
       Serial.print(F("[STATUS_TX] sendFrame_return="));
       Serial.println(sent ? F("true") : F("false"));
       if (!sent) {

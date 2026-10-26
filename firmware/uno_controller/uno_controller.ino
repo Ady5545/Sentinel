@@ -1,5 +1,5 @@
 /*
- * SENTINEL ATM Controller Firmware V3.3
+ * SENTINEL ATM Controller Firmware V3.4
  * Target: Arduino Uno / ATmega328P
  * ESP32 link: AltSoftSerial RX=D8, TX=D9, 4800 8N1
  * Desktop/operator USB link: Serial at 115200
@@ -120,8 +120,10 @@ uint32_t lastGuardianSequence = 0;
 uint32_t lastGuardianFrameAt = 0;
 uint32_t lastGuardianStatusAt = 0;
 uint32_t lastGuardianStatusSequence = 0;
+uint32_t lastGuardianStatusAckSequence = 0;
 uint8_t initialHealthyFrameDrops = 0;
 uint32_t lastHeartbeatAt = 0;
+uint32_t lastHeartbeatSequence = 0;
 uint32_t lastHelloAt = 0;
 uint32_t handshakeStartedAt = 0;
 bool guardianHelloSeen = false;
@@ -433,9 +435,11 @@ void sendHeartbeat(uint32_t now) {
   char payload[48];
   snprintf_P(payload, sizeof(payload), PSTR("state=%S;up=%lu"),
            stateName(atmState), (unsigned long)now);
-  if (sendFrame(F("HEARTBEAT"), payload)) {
-    // Start the heartbeat interval after the complete frame transmission
-    // returns, rather than before sendFrame begins.
+  const uint32_t heartbeatSequence = txSequence + 1UL;
+  if (sendFrameAtSequence(F("HEARTBEAT"), payload, heartbeatSequence)) {
+    // STATUS echoes this exact heartbeat sequence; local send success does
+    // not prove the peer received the message.
+    lastHeartbeatSequence = heartbeatSequence;
     lastHeartbeatAt = millis();
     awaitingGuardianStatus = true;
   }
@@ -445,20 +449,50 @@ bool parsePayloadField(const char *payload, const __FlashStringHelper *key, char
   if (!payload || !key || !out || outSize < 2) return false;
   const size_t keyLen = strlen_P((PGM_P)key);
   const char *cursor = payload;
+  bool found = false;
   while (*cursor) {
     const char *end = strchr(cursor, ';');
     const size_t tokenLen = end ? (size_t)(end - cursor) : strlen(cursor);
-    if (tokenLen > keyLen && strncmp_P(cursor, (PGM_P)key, keyLen) == 0 && cursor[keyLen] == '=') {
+    const char *equals = (const char *)memchr(cursor, '=', tokenLen);
+    if (tokenLen == 0 || !equals || equals == cursor || equals >= cursor + tokenLen - 1 ||
+        memchr(equals + 1, '=', (size_t)((cursor + tokenLen) - (equals + 1))) != NULL) return false;
+    if ((size_t)(equals - cursor) == keyLen &&
+        strncmp_P(cursor, (PGM_P)key, keyLen) == 0) {
+      if (found) return false;
       const size_t valueLen = tokenLen - keyLen - 1;
-      if (valueLen == 0 || valueLen >= outSize) return false;
-      memcpy(out, cursor + keyLen + 1, valueLen);
+      if (valueLen >= outSize) return false;
+      memcpy(out, equals + 1, valueLen);
       out[valueLen] = '\0';
-      return true;
+      found = true;
     }
     if (!end) break;
     cursor = end + 1;
+    if (!*cursor) return false;
   }
-  return false;
+  return found;
+}
+
+bool parseHealthyStatusAck(const char *payload, uint32_t &ackSequence) {
+  if (!payload || strncmp_P(payload, PSTR("HEALTHY;ack_seq="), 16) != 0) return false;
+  return parseUnsigned(payload + 16, 0xFFFFFFFFUL, ackSequence) && ackSequence != 0;
+}
+
+bool payloadIsIdOnly(const char *payload) {
+  char id[12];
+  if (!payload || strncmp_P(payload, PSTR("id="), 3) != 0 || strchr(payload, ';')) return false;
+  return parsePayloadField(payload, F("id"), id, sizeof(id)) && strcmp(payload + 3, id) == 0;
+}
+
+bool payloadIsIdReason(const char *payload) {
+  char id[12], reason[20];
+  if (!payload || strncmp_P(payload, PSTR("id="), 3) != 0) return false;
+  const char *separator = strchr(payload, ';');
+  if (!separator || strncmp_P(separator + 1, PSTR("reason="), 7) != 0 ||
+      strchr(separator + 1, ';')) return false;
+  if (!parsePayloadField(payload, F("id"), id, sizeof(id)) ||
+      !parsePayloadField(payload, F("reason"), reason, sizeof(reason))) return false;
+  return strcmp(payload + 3, id) == 0 &&
+         (strcmp(reason, "TX_LIMIT") == 0 || strcmp(reason, "WINDOW_LIMIT") == 0);
 }
 
 bool transactionIdMatches(const char *payload) {
@@ -527,7 +561,17 @@ void completeWithdrawal() {
   snprintf_P(details, sizeof(details), PSTR("id=%s;amount=%lu;balance=%lu"),
            txPendingId, (unsigned long)txPendingAmount, (unsigned long)account.balance);
   emitEvent(F("WITHDRAWAL_APPROVED"), details);
-  sendFrame(F("EVENT"), details);
+  char commitPayload[48];
+  snprintf_P(commitPayload, sizeof(commitPayload), PSTR("event=TX_COMMITTED;id=%s;amount=%lu"),
+             txPendingId, (unsigned long)txPendingAmount);
+  if (!sendFrame(F("EVENT"), commitPayload)) {
+    Serial.println(F("[FAULT] TX_COMMITTED report was not queued; guardian lock remains fail-closed."));
+    txPendingAmount = 0;
+    txPendingId[0] = '\0';
+    memset(txPendingPlan, 0, sizeof(txPendingPlan));
+    enterGuardianLock(F("Failed to report a committed virtual transaction to guardian."));
+    return;
+  }
   Serial.print(F("[VIRTUAL_ONLY] Withdrawal committed: "));
   Serial.print(txPendingAmount);
   Serial.print(F("; balance="));
@@ -573,13 +617,16 @@ void handleGuardianLine(char *line) {
   const char *type = fields[1];
   const char *payload = fields[4];
 
-  // A retransmitted HEALTHY status uses its original sequence. Accept only an
-  // exact duplicate of the most recently accepted STATUS inside the short
-  // retry window; never refresh the status timestamp for a duplicate.
+  uint32_t statusAckSequence = 0;
+  const bool healthyStatusPayload = parseHealthyStatusAck(payload, statusAckSequence);
+
+  // Retransmitted STATUS uses the original guardian sequence and explicitly
+  // acknowledges the prior Uno heartbeat. A duplicate never refreshes liveness.
   if (!guardianRevokeLatched && handshakeComplete &&
       lastGuardianStatusSequence != 0 &&
       seq == lastGuardianStatusSequence && seq == lastGuardianSequence &&
-      STREQ(type, "STATUS") && STREQ(payload, "HEALTHY") &&
+      STREQ(type, "STATUS") && healthyStatusPayload &&
+      statusAckSequence == lastGuardianStatusAckSequence &&
       (uint32_t)(millis() - lastGuardianStatusAt) <= HEALTHY_STATUS_DUPLICATE_WINDOW_MS) {
     Serial.println(F("[LINK_RETRY] Duplicate HEALTHY STATUS ignored."));
     return;
@@ -650,19 +697,25 @@ void handleGuardianLine(char *line) {
 
   if (STREQ(type, "STATUS")) {
     if (guardianRevokeLatched) return;
-    if (!STREQ(payload, "HEALTHY")) {
-      enterGuardianLock(F("Malformed or non-healthy guardian status."));
+    if (!healthyStatusPayload || !awaitingGuardianStatus ||
+        statusAckSequence != lastHeartbeatSequence) {
+      Serial.print(F("[STATUS_RX] Rejected status acknowledgement; expected heartbeat seq="));
+      Serial.print(lastHeartbeatSequence);
+      Serial.print(F(" received="));
+      Serial.println(healthyStatusPayload ? statusAckSequence : 0);
+      enterGuardianLock(F("Guardian STATUS did not acknowledge the outstanding heartbeat."));
       return;
     }
     lastGuardianStatusAt = millis();
     lastGuardianStatusSequence = seq;
+    lastGuardianStatusAckSequence = statusAckSequence;
     initialHealthyFrameDrops = 0;
     guardianLink = LINK_OBSERVING;
     awaitingGuardianStatus = false;
     Serial.print(F("[STATUS_RX] Accepted HEALTHY seq="));
     Serial.println(seq);
   } else if (STREQ(type, "PERMIT")) {
-    if (!guardianFresh() || atmState != ATM_WITHDRAW_PENDING ||
+    if (!payloadIsIdOnly(payload) || !guardianFresh() || atmState != ATM_WITHDRAW_PENDING ||
         (uint32_t)(millis() - txPendingStartedAt) > transactionDecisionTimeoutMs ||
         !transactionIdMatches(payload)) {
       enterGuardianLock(F("Permit stale or not matched to the pending transaction."));
@@ -670,7 +723,7 @@ void handleGuardianLine(char *line) {
     }
     completeWithdrawal();
   } else if (STREQ(type, "DENY")) {
-    if (atmState != ATM_WITHDRAW_PENDING || !transactionIdMatches(payload)) {
+    if (!payloadIsIdReason(payload) || atmState != ATM_WITHDRAW_PENDING || !transactionIdMatches(payload)) {
       enterGuardianLock(F("Denial did not match the pending transaction."));
       return;
     }
@@ -681,6 +734,10 @@ void handleGuardianLine(char *line) {
     memset(txPendingPlan, 0, sizeof(txPendingPlan));
     setAtmState(ATM_AUTHENTICATED);
   } else if (STREQ(type, "REVOKE")) {
+    if (!STREQ(payload, "POLICY_REVOKE")) {
+      enterGuardianLock(F("Malformed guardian REVOKE payload."));
+      return;
+    }
     enterGuardianLock(F("Guardian revoked controller authority."));
   } else {
     enterGuardianLock(F("Unknown guardian message type."));
@@ -688,8 +745,11 @@ void handleGuardianLine(char *line) {
 }
 
 void pollGuardian() {
-  while (GuardianSerial.available()) {
+  uint8_t bytesProcessed = 0;
+  static const uint8_t MAX_PEER_RX_BYTES_PER_LOOP = 64;
+  while (GuardianSerial.available() && bytesProcessed < MAX_PEER_RX_BYTES_PER_LOOP) {
     const char c = (char)GuardianSerial.read();
+    ++bytesProcessed;
     ++guardianRxByteCount;
     guardianLastByteAt = millis();
     if (c == '\n') {
@@ -1004,7 +1064,14 @@ void handleWithdraw(const char *amountText) {
 
   char payload[48];
   snprintf_P(payload, sizeof(payload), PSTR("id=%s;amount=%lu"), txPendingId, (unsigned long)amount);
-  sendFrame(F("REQUEST"), payload);
+  if (!sendFrame(F("REQUEST"), payload)) {
+    Serial.println(F("[FAULT] Withdrawal REQUEST transmit failed; pending transaction is locked."));
+    txPendingAmount = 0;
+    txPendingId[0] = '\0';
+    memset(txPendingPlan, 0, sizeof(txPendingPlan));
+    enterGuardianLock(F("Failed to transmit pending withdrawal request."));
+    return;
+  }
   char details[40];
   snprintf_P(details, sizeof(details), PSTR("id=%s;amount=%lu"), txPendingId, (unsigned long)amount);
   emitEvent(F("WITHDRAWAL_PENDING"), details);
@@ -1110,11 +1177,11 @@ void setup() {
   budgetWindowStartedAt = millis();
   atmState = ATM_UNCOMMISSIONED;
   Serial.println();
-  Serial.println(F("SENTINEL ATM CONTROLLER V3.3 READY"));
+  Serial.println(F("SENTINEL ATM CONTROLLER V3.4 READY"));
   Serial.println(F("EDUCATIONAL DEMO: fictional accounts; no physical dispensing."));
   Serial.println(F("No default card or PIN exists. Runtime provisioning required."));
   Serial.print(F("BUILD (self-reported): "));
-  Serial.println(F("UNO-ATM-V3.3"));
+  Serial.println(F("UNO-ATM-V3.4"));
   Serial.print(F("PEER UART: AltSoftSerial RX=D"));
   Serial.print(PEER_RX_PIN);
   Serial.print(F(" TX=D"));
