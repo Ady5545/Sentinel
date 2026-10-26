@@ -1,7 +1,7 @@
 /*
  * SENTINEL ESP32 Independent Guardian Firmware v3
  * Target: ESP32 Dev Module
- * UART2: RX=GPIO16, TX=GPIO17, 9600 8N1
+ * UART2: RX=GPIO16, TX=GPIO17, 4800 8N1
  * USB diagnostics/operator configuration: Serial at 115200
  *
  * This is a research guardian, not a physical dispenser interlock and not
