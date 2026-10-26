@@ -528,8 +528,8 @@ void handleUsbCommand(char *line) {
     // empty line
   } else if (strcmp(argv[0], "STATUS") == 0 && argc == 1) {
     printStatus();
-  } else if ((strcmp(argv[0], "SET_LIMITS") == 0 && argc == 3 ||
-              strcmp(argv[0], "SET_POLICY") == 0 && argc == 9) && !awaitingCommit) {
+  } else if (((strcmp(argv[0], "SET_LIMITS") == 0 && argc == 3) ||
+              (strcmp(argv[0], "SET_POLICY") == 0 && argc == 9)) && !awaitingCommit) {
     uint32_t maxValue = 0, windowValue = 0;
     bool valid = parseUnsigned(argv[1], 1000000UL, maxValue) &&
                  parseUnsigned(argv[2], 1000000UL, windowValue) &&
