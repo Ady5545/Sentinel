@@ -104,7 +104,7 @@ test("Uno receiver diagnostics distinguish missing bytes from incomplete lines",
   assert.ok(uno.includes("[UART_DIAG] rx_bytes="));
   assert.ok(uno.includes("byte_age_ms="));
   assert.ok(uno.includes("line_age_ms="));
-  assert.ok(uno.includes("guardianRxByteCount++"));
+  assert.ok(uno.includes("++guardianRxByteCount;"));
   assert.ok(uno.includes("guardianRxLineCount++"));
 });
 
