@@ -5,6 +5,7 @@ import type { HilTransaction } from './hil-evidence';
 const requested: HilTransaction = {
   id: 'T0000012', amount: 500, phase: 'REQUESTED',
   permitSeen: false, unoCommitSeen: false, guardianCommitSeen: false,
+  guardianAckSentSeen: false, unoAckAcceptedSeen: false,
   message: 'Uno reported a pending withdrawal.'
 };
 
@@ -29,7 +30,8 @@ describe('HIL customer terminal', () => {
     expect(state.screen).toBe('pending');
     state = applyHilTransactionStatus(state, { ...requested, phase: 'UNO COMMITTED', unoCommitSeen: true, balance: 49000 });
     expect(state.screen).toBe('pending');
-    state = applyHilTransactionStatus(state, { ...requested, phase: 'RECONCILED', permitSeen: true, unoCommitSeen: true, guardianCommitSeen: true, balance: 49000 });
+    state = applyHilTransactionStatus(state, { ...requested, phase: 'RECONCILED', permitSeen: true, unoCommitSeen: true, guardianCommitSeen: true,
+      guardianAckSentSeen: true, unoAckAcceptedSeen: true, balance: 49000 });
     expect(state.screen).toBe('receipt');
     expect(state.boardBalance).toBe(49000);
     expect(state.message).toContain('correlated by ID and amount');
