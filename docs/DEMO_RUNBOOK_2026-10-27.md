@@ -6,10 +6,10 @@ Present the **SENTINEL desktop ATM simulator** to judges. Do not use Arduino IDE
 
 ## Start the desktop simulator on the Mac
 
-From Terminal:
+From Terminal, open the folder where the SENTINEL repository is cloned. If it is not cloned yet, clone it first. Then run:
 
 ```bash
-cd ~/Documents/Ady/Sentinel
+cd /path/to/Sentinel
 git fetch origin
 git checkout fix/one-way-sentinel-fixture-demo-2026-10-27
 git pull --ff-only origin fix/one-way-sentinel-fixture-demo-2026-10-27
