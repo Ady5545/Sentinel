@@ -563,3 +563,70 @@ test("commit report retry exhaustion fails closed without repeating controller m
 test("wrap-safe elapsed milliseconds works across uint32 rollover", () => {
   assert.equal(elapsedMs(0x00000020, 0xFFFFFFF0), 0x30);
 });
+
+
+test("commit ACK rejects wrong transaction, amount, sequence, type, and session", () => {
+  const cases = [
+    encodeFrame({ type: "ACK", session: "U0000003C", seq: 7, payload: "ack_seq=4;id=TWRONG;amount=500" }),
+    encodeFrame({ type: "ACK", session: "U0000003C", seq: 7, payload: "ack_seq=4;id=T1;amount=1000" }),
+    encodeFrame({ type: "ACK", session: "U0000003C", seq: 8, payload: "ack_seq=4;id=T1;amount=500" }),
+    encodeFrame({ type: "STATUS", session: "U0000003C", seq: 7, payload: "ack_seq=4;id=T1;amount=500" }),
+    encodeFrame({ type: "ACK", session: "U0000004D", seq: 7, payload: "ack_seq=4;id=T1;amount=500" })
+  ];
+  for (const ack of cases) {
+    const exchange = new ReliableCommitExchange({ id: "T1", amount: 500 });
+    exchange.controllerCommit();
+    const result = exchange.controllerReceiveAck(ack);
+    assert.equal(result.ok, false);
+    assert.equal(exchange.faulted, true);
+    assert.equal(exchange.controllerCommitCount, 1, "bad ACK must never repeat controller mutation");
+    assert.equal(exchange.controllerBalance, 24500);
+  }
+});
+
+test("conflicting duplicate commit report cannot be mistaken for an idempotent retry", () => {
+  const exchange = new ReliableCommitExchange({ id: "T4", amount: 500 });
+  const first = exchange.controllerCommit();
+  assert.equal(exchange.guardianReceiveEvent(first.frame).counted, true);
+  const conflicting = encodeFrame({
+    type: "EVENT", session: "U0000003C", seq: 4,
+    payload: "event=TX_COMMITTED;id=T4;amount=1000"
+  });
+  assert.deepEqual(exchange.guardianReceiveEvent(conflicting), {
+    ok: false, reason: "CONFLICTING_COMMIT"
+  });
+  assert.equal(exchange.guardianCommitCount, 1);
+  assert.equal(exchange.controllerCommitCount, 1);
+});
+
+test("lost every commit report attempt leaves one controller mutation and an explicit fault", () => {
+  const exchange = new ReliableCommitExchange({ id: "T5", amount: 1500, maxAttempts: 3 });
+  const first = exchange.controllerCommit();
+  assert.equal(first.ok, true);
+  assert.equal(exchange.retryReport().frame, first.frame);
+  assert.equal(exchange.retryReport().frame, first.frame);
+  assert.deepEqual(exchange.retryReport(), { ok: false, reason: "RETRY_EXHAUSTED" });
+  assert.equal(exchange.faulted, true);
+  assert.equal(exchange.awaitingAck, false);
+  assert.equal(exchange.controllerCommitCount, 1);
+  assert.equal(exchange.controllerBalance, 23500);
+  assert.equal(exchange.controllerCassette, 48500);
+  assert.equal(exchange.guardianCommitCount, 0);
+});
+
+test("an identical commit retry is accepted only as the same full encoded frame", () => {
+  const exchange = new ReliableCommitExchange({ id: "T6", amount: 750 });
+  const first = exchange.controllerCommit();
+  const accepted = exchange.guardianReceiveEvent(first.frame);
+  assert.equal(accepted.counted, true);
+  assert.equal(exchange.guardianReceiveEvent(first.frame).duplicate, true);
+
+  const samePayloadDifferentSequence = encodeFrame({
+    type: "EVENT", session: "U0000003C", seq: 5,
+    payload: "event=TX_COMMITTED;id=T6;amount=750"
+  });
+  assert.deepEqual(exchange.guardianReceiveEvent(samePayloadDifferentSequence), {
+    ok: false, reason: "CONFLICTING_COMMIT"
+  });
+  assert.equal(exchange.guardianCommitCount, 1);
+});
