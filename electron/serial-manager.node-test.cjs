@@ -280,3 +280,35 @@ test('HIL-only commands still fail closed in HIL mode when the paired reports ar
     /fresh HEALTHY\/OBSERVING/
   );
 });
+
+
+test('renderer reload after HIL commissioning latches authority until paired reboot and recommissioning', async () => {
+  const h = makeHarness();
+  const pair = await h.connectPair();
+
+  pair.uno.feed('SENTINEL ATM CONTROLLER V3.4 READY\n');
+  pair.sentinel.feed('SENTINEL ESP32 GUARDIAN V3.4 READY\n');
+  await h.markPairReady();
+  h.manager.setResearchMode('HIL');
+
+  pair.uno.feed('ATM_EVENT|ACCOUNT_PROVISIONED|card=CARD01;balance=50000\n');
+  pair.uno.feed('ATM_EVENT|CASH_CONFIGURED|currency=INR;notes500=20;notes200=20;notes100=20;notes50=20;total=17000\n');
+  assert.equal(h.manager.getReadinessSnapshot().hilShadowTouched, true);
+
+  h.manager.rendererReloaded();
+  assert.equal(h.manager.getReadinessSnapshot().hilFaultLatched, true);
+  await assert.rejects(
+    h.manager.writeCommand('uno', { name: 'WITHDRAW', args: ['500'] }),
+    /fault latch/
+  );
+  assert.equal(h.manager.clearHilFault().ok, false);
+
+  pair.uno.feed('SENTINEL ATM CONTROLLER V3.4 READY\n');
+  pair.sentinel.feed('SENTINEL ESP32 GUARDIAN V3.4 READY\n');
+  await h.markPairReady();
+
+  assert.equal(h.manager.getReadinessSnapshot().canClearHilFault, true);
+  assert.deepEqual(h.manager.clearHilFault(), { ok: true });
+  assert.equal(h.manager.getReadinessSnapshot().hilFaultLatched, false);
+  assert.equal(h.manager.getReadinessSnapshot().hilShadowTouched, false);
+});
