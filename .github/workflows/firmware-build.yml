@@ -5,10 +5,14 @@ on:
     branches: [main]
     paths:
       - "firmware/**"
+      - ".github/protocol-v3-handshake-contract.mjs"
+      - "docs/SENTINEL_PROTOCOL.md"
       - ".github/workflows/firmware-build.yml"
   pull_request:
     paths:
       - "firmware/**"
+      - ".github/protocol-v3-handshake-contract.mjs"
+      - "docs/SENTINEL_PROTOCOL.md"
       - ".github/workflows/firmware-build.yml"
   workflow_dispatch:
 
@@ -39,3 +43,16 @@ jobs:
         run: arduino-cli core install "${{ matrix.core }}" --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
       - name: Compile firmware
         run: arduino-cli compile --warnings all --fqbn "${{ matrix.fqbn }}" "${{ matrix.sketch }}"
+
+  protocol-tests:
+    name: V3 protocol contract tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Run protocol contract tests
+        run: node --test .github/protocol-v3-handshake-contract.mjs
