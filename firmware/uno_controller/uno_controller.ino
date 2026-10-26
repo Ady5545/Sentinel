@@ -503,12 +503,16 @@ void handleGuardianLine(char *line) {
   const char *payload = fields[4];
 
   if (STREQ(type, "HELLO")) {
+    if (handshakeComplete) {
+      enterGuardianLock(F("Repeated guardian HELLO inside an established session."));
+      return;
+    }
     if (!STRNEQ(payload, "ESP32-SENTINEL-V2", 17)) {
       enterGuardianLock(F("Unexpected guardian protocol identity."));
       return;
     }
     handshakeComplete = true;
-    if (!guardianRevokeLatched) guardianLink = LINK_OBSERVING;
+    if (!guardianRevokeLatched) guardianLink = LINK_UNKNOWN;
     Serial.println(F("[LINK] V2 guardian handshake observed (identity is self-reported)."));
     sendFrame(F("ACK"), F("HELLO_ACCEPTED"));
     if (!statePublished) sendState();
