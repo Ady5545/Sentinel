@@ -428,7 +428,9 @@ void sendHeartbeat(uint32_t now) {
   snprintf_P(payload, sizeof(payload), PSTR("state=%S;up=%lu"),
            stateName(atmState), (unsigned long)now);
   if (sendFrame(F("HEARTBEAT"), payload)) {
-    lastHeartbeatAt = now;
+    // SoftwareSerial::print is blocking. Start the interval after the last
+    // heartbeat byte has actually left the Uno, not before transmission.
+    lastHeartbeatAt = millis();
     awaitingGuardianStatus = true;
   }
 }
