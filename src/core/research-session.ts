@@ -138,7 +138,7 @@ export function reduceResearchRun(run: ResearchRunRecord, action: ResearchAction
   if (action.type === 'FAULT') return freeze(run, action.reason, at, action.role);
 
   if (run.mode !== 'HIL') {
-    return appendEvent(run, action.type, 'HIL_ACTION_BLOCKED', 'HIL evidence rejected because the run is software-only.', 'HOST_DERIVED', at);
+    return appendEvent(run, 'SYSTEM', 'HIL_ACTION_BLOCKED', 'HIL action ' + action.type + ' rejected because the run is software-only.', 'HOST_DERIVED', at);
   }
   if (run.phase === 'FROZEN') return run;
 
