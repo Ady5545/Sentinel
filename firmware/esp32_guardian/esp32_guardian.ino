@@ -1,5 +1,5 @@
 /*
- * SENTINEL ESP32 Independent Guardian Firmware v2
+ * SENTINEL ESP32 Independent Guardian Firmware v3
  * Target: ESP32 Dev Module
  * UART2: RX=GPIO16, TX=GPIO17, 9600 8N1
  * USB diagnostics/operator configuration: Serial at 115200
@@ -19,6 +19,8 @@ static const unsigned long PEER_BAUD = 9600;
 static const unsigned long USB_BAUD = 115200;
 static const unsigned long DEFAULT_HEARTBEAT_TIMEOUT_MS = 1800UL;
 static const unsigned long DEFAULT_LINK_TIMEOUT_MS = 2600UL;
+static const unsigned long HELLO_RETRY_MS = 800UL;
+static const unsigned long HANDSHAKE_TIMEOUT_MS = 8000UL;
 static const unsigned long USB_STATUS_INTERVAL_MS = 2000UL;
 static const unsigned long DEFAULT_COMMIT_TIMEOUT_MS = 1800UL;
 static const unsigned long DEFAULT_PIN_FAILURE_WINDOW_MS = 60000UL;
@@ -29,7 +31,7 @@ static const unsigned long DEFAULT_BUDGET_WINDOW_MS = 86400000UL;
 static const size_t FRAME_MAX = 120;
 static const size_t USB_LINE_MAX = 96;
 
-enum GuardianMode { GUARDIAN_STARTING, GUARDIAN_OBSERVING, GUARDIAN_REVOKED };
+enum GuardianMode { GUARDIAN_STARTING, GUARDIAN_NEGOTIATING, GUARDIAN_OBSERVING, GUARDIAN_REVOKED };
 GuardianMode mode = GUARDIAN_STARTING;
 char sessionId[13] = {0};
 char rxBuffer[FRAME_MAX];
@@ -40,6 +42,10 @@ size_t usbLength = 0;
 bool droppingUsbLine = false;
 uint32_t txSequence = 0;
 uint32_t lastUnoSequence = 0;
+uint32_t initialUnoHelloSequence = 0;
+uint32_t handshakeStartedAt = 0;
+uint32_t lastHelloAt = 0;
+uint32_t handshakeRetryCount = 0;
 uint32_t lastValidUnoAt = 0;
 uint32_t lastHeartbeatAt = 0;
 uint32_t lastStatusAt = 0;
@@ -59,6 +65,7 @@ uint32_t pendingPermitStartedAt = 0;
 uint32_t pinFailureWindowStartedAt = 0;
 uint8_t pinFailuresInWindow = 0;
 bool sessionEstablished = false;
+bool handshakeConfirmed = false;
 bool heartbeatSeen = false;
 bool revokeLatched = false;
 bool reportedAuthenticated = false;
@@ -76,6 +83,7 @@ void secureClear(char *buffer, size_t length) {
 const char *modeName() {
   switch (mode) {
     case GUARDIAN_STARTING: return "STARTING";
+    case GUARDIAN_NEGOTIATING: return "NEGOTIATING";
     case GUARDIAN_OBSERVING: return "OBSERVING";
     case GUARDIAN_REVOKED: return "REVOKED";
   }
@@ -100,10 +108,15 @@ bool validSession(const char *s) {
   return true;
 }
 
-bool sendFrame(const char *type, const char *payload) {
+bool sendFrameAtSequence(const char *type, const char *payload, uint32_t seq) {
+  if (seq == 0) {
+    Serial.println(F("[FAULT] Sequence zero is invalid; guardian revoked."));
+    mode = GUARDIAN_REVOKED;
+    revokeLatched = true;
+    return false;
+  }
   char prefix[FRAME_MAX];
-  const uint32_t seq = ++txSequence;
-  const int n = snprintf(prefix, sizeof(prefix), "S2|%s|%s|%lu|%s", type,
+  const int n = snprintf(prefix, sizeof(prefix), "S3|%s|%s|%lu|%s", type,
                          sessionId[0] ? sessionId : "ESP000001",
                          (unsigned long)seq, (payload && payload[0]) ? payload : "-");
   if (n <= 0 || (size_t)n >= sizeof(prefix)) {
@@ -112,6 +125,7 @@ bool sendFrame(const char *type, const char *payload) {
     revokeLatched = true;
     return false;
   }
+  if (seq > txSequence) txSequence = seq;
   const uint16_t crc = crc16CcittFalse((const uint8_t *)prefix, (size_t)n);
   Serial2.print(prefix);
   Serial2.print('|');
@@ -120,6 +134,16 @@ bool sendFrame(const char *type, const char *payload) {
   Serial2.print(crcText);
   Serial2.print('\n');
   return true;
+}
+
+bool sendFrame(const char *type, const char *payload) {
+  if (txSequence == 0xFFFFFFFFUL) {
+    Serial.println(F("[FAULT] Outgoing sequence exhausted; guardian revoked."));
+    mode = GUARDIAN_REVOKED;
+    revokeLatched = true;
+    return false;
+  }
+  return sendFrameAtSequence(type, payload, txSequence + 1UL);
 }
 
 bool parseFrame(char *line, char fields[5][48], uint32_t &seqOut) {
@@ -147,7 +171,7 @@ bool parseFrame(char *line, char fields[5][48], uint32_t &seqOut) {
     part = strtok_r(NULL, "|", &save);
   }
   if (part || count != 5) return false;
-  if (strcmp(fields[0], "S2") != 0 || !validSession(fields[2])) return false;
+  if (strcmp(fields[0], "S3") != 0 || !validSession(fields[2])) return false;
   if (!fields[3][0]) return false;
   for (size_t i = 0; fields[3][i]; ++i)
     if (fields[3][i] < '0' || fields[3][i] > '9') return false;
@@ -243,7 +267,8 @@ void revoke(const char *reason) {
   awaitingCommit = false;
   Serial.print(F("[REVOKE] "));
   Serial.println(reason);
-  sendFrame("REVOKE", "POLICY_REVOKE");
+  // A peer that has not completed negotiation cannot safely correlate a REVOKE frame.
+  if (handshakeConfirmed) sendFrame("REVOKE", "POLICY_REVOKE");
 }
 
 void denyRequest(const char *id, const char *reason) {
@@ -369,6 +394,10 @@ void handleRequest(const char *payload) {
     return;
   }
   if (revokeLatched || mode == GUARDIAN_REVOKED) return;
+  if (!handshakeConfirmed) {
+    revoke("Transaction request before V3 handshake completion.");
+    return;
+  }
   if (awaitingCommit) {
     revoke("New request arrived before previous transaction was reconciled.");
     return;
@@ -426,30 +455,62 @@ void handleUnoLine(char *line) {
   const char *payload = fields[4];
 
   if (!sessionEstablished) {
-    if (strcmp(type, "HELLO") != 0 || strcmp(payload, "UNO-ATM-V2") != 0) {
-      revoke("Expected initial UNO-ATM-V2 HELLO.");
+    if (strcmp(type, "HELLO") != 0 || strcmp(payload, "UNO-ATM-V3") != 0 || seq != 1) {
+      revoke("Expected initial S3 UNO-ATM-V3 HELLO with sequence 1.");
       return;
     }
     strncpy(sessionId, incomingSession, sizeof(sessionId) - 1);
     sessionId[sizeof(sessionId) - 1] = '\0';
     sessionEstablished = true;
+    initialUnoHelloSequence = seq;
     lastUnoSequence = seq;
     lastValidUnoAt = millis();
-    mode = GUARDIAN_OBSERVING;
+    handshakeStartedAt = lastValidUnoAt;
+    lastHelloAt = lastValidUnoAt;
+    mode = GUARDIAN_NEGOTIATING;
     budgetWindowStartedAt = millis();
     pinFailureWindowStartedAt = millis();
-    // Send one startup frame only. The Uno replies with ACK + STATE; sending a
-    // second frame here can collide with the Uno transmitting those responses.
-    sendFrame("HELLO", "ESP32-SENTINEL-V2");
-    Serial.print(F("[LINK] Session established: "));
+    if (!sendFrameAtSequence("HELLO", "ESP32-SENTINEL-V3", 1)) {
+      revoke("Unable to transmit V3 handshake HELLO.");
+      return;
+    }
+    Serial.print(F("[LINK] V3 negotiation started for session: "));
     Serial.println(sessionId);
     return;
   }
+
   if (strcmp(incomingSession, sessionId) != 0) {
-    revoke("Unexpected UNO session change; clean restart required.");
+    revoke("Unexpected UNO session change; clean paired restart required.");
     return;
   }
-  if (seq != lastUnoSequence + 1) {
+
+  // An identical initial HELLO is an idempotent retry only before the first
+  // valid heartbeat. It never advances the receive sequence or repeats effects.
+  if (strcmp(type, "HELLO") == 0 && seq == initialUnoHelloSequence &&
+      strcmp(payload, "UNO-ATM-V3") == 0 && !heartbeatSeen) {
+    lastValidUnoAt = millis();
+    if (revokeLatched) return;
+    if (handshakeConfirmed) {
+      sendFrameAtSequence("ACK", "HELLO_ACCEPTED", 2);
+    } else {
+      sendFrameAtSequence("HELLO", "ESP32-SENTINEL-V3", 1);
+    }
+    ++handshakeRetryCount;
+    if ((handshakeRetryCount % 5UL) == 1UL) {
+      Serial.print(F("[LINK_RETRY] Replayed fixed-sequence handshake response; duplicate HELLOs="));
+      Serial.println(handshakeRetryCount);
+    }
+    return;
+  }
+
+  // An exact duplicate of the non-authorizing controller handshake ACK is benign.
+  if (strcmp(type, "ACK") == 0 && seq == 2 &&
+      strcmp(payload, "HELLO_ACCEPTED") == 0 && handshakeConfirmed && !heartbeatSeen) {
+    Serial.println(F("[LINK_RETRY] Duplicate controller handshake ACK ignored."));
+    return;
+  }
+
+  if (seq != lastUnoSequence + 1UL) {
     revoke("UNO frame sequence gap, duplicate or replay.");
     return;
   }
@@ -457,10 +518,21 @@ void handleUnoLine(char *line) {
   lastValidUnoAt = millis();
 
   if (strcmp(type, "HELLO") == 0) {
-    revoke("Unexpected repeated HELLO inside established session.");
+    revoke("Unexpected repeated HELLO outside the V3 startup retry window.");
   } else if (strcmp(type, "ACK") == 0) {
-    // ACKs are observations only; they can never grant authority.
-    Serial.println(F("[OBSERVE] UNO ACK received."));
+    if (handshakeConfirmed || strcmp(payload, "HELLO_ACCEPTED") != 0) {
+      revoke("Unexpected or malformed UNO handshake ACK.");
+      return;
+    }
+    if (!sendFrameAtSequence("ACK", "HELLO_ACCEPTED", 2)) {
+      revoke("Unable to transmit final V3 handshake ACK.");
+      return;
+    }
+    handshakeConfirmed = true;
+    mode = GUARDIAN_NEGOTIATING;  // No observing/permit state before a valid heartbeat.
+    Serial.println(F("[LINK] V3 handshake confirmed; waiting for first valid heartbeat."));
+  } else if (!handshakeConfirmed) {
+    revoke("UNO sent state or transaction traffic before V3 handshake completion.");
   } else if (strcmp(type, "STATE") == 0) {
     handleState(payload);
   } else if (strcmp(type, "HEARTBEAT") == 0) {
@@ -602,22 +674,38 @@ void setup() {
   budgetWindowStartedAt = millis();
   pinFailureWindowStartedAt = millis();
   Serial.println();
-  Serial.println(F("SENTINEL ESP32 GUARDIAN V2 READY"));
+  Serial.println(F("SENTINEL ESP32 GUARDIAN V3 READY"));
   Serial.println(F("Claims: protocol/state policy observation only; no secure element or physical interlock."));
   Serial.println(F("UART2: RX GPIO16 / TX GPIO17 / 9600 8N1"));
   Serial.println(F("Type HELP for local RAM policy commands."));
 }
 
 void loop() {
-  const uint32_t now = millis();
   pollUno();
   pollUsb();
+  const uint32_t now = millis();
 
-  if (sessionEstablished && !revokeLatched && heartbeatSeen &&
+  if (sessionEstablished && !handshakeConfirmed && !revokeLatched) {
+    if ((uint32_t)(now - handshakeStartedAt) >= HANDSHAKE_TIMEOUT_MS) {
+      revoke("V3 handshake confirmation timeout; clean paired restart required.");
+    } else if ((uint32_t)(now - lastHelloAt) >= HELLO_RETRY_MS) {
+      ++handshakeRetryCount;
+      if ((handshakeRetryCount % 5UL) == 1UL) {
+        Serial.print(F("[LINK_RETRY] Re-sending identical ESP32 HELLO seq=1; retries="));
+        Serial.println(handshakeRetryCount);
+      }
+      if (!sendFrameAtSequence("HELLO", "ESP32-SENTINEL-V3", 1)) {
+        revoke("Unable to retransmit V3 handshake HELLO.");
+      }
+      lastHelloAt = now;
+    }
+  }
+
+  if (sessionEstablished && !revokeLatched && handshakeConfirmed && heartbeatSeen &&
       (uint32_t)(now - lastHeartbeatAt) > heartbeatTimeoutMs) {
     revoke("UNO heartbeat timeout.");
   }
-  if (sessionEstablished && !revokeLatched &&
+  if (sessionEstablished && !revokeLatched && handshakeConfirmed &&
       (uint32_t)(now - lastValidUnoAt) > linkTimeoutMs) {
     revoke("UNO protocol traffic timeout.");
   }
@@ -625,8 +713,11 @@ void loop() {
     revoke("Controller did not report the matching transaction commit.");
   }
   if ((uint32_t)(now - lastStatusAt) >= USB_STATUS_INTERVAL_MS) {
-    if (!sessionEstablished) Serial.println(F("[WAIT] Waiting for UNO-ATM-V2 HELLO; no transaction permit."));
-    else printStatus();
+    if (!sessionEstablished && !revokeLatched) {
+      Serial.println(F("[WAIT] Waiting for UNO-ATM-V3 HELLO; no transaction permit."));
+    } else {
+      printStatus();
+    }
     lastStatusAt = now;
   }
 }
