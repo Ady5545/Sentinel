@@ -1,7 +1,7 @@
 /*
  * SENTINEL ATM Controller Firmware V3.2
  * Target: Arduino Uno / ATmega328P
- * ESP32 link: SoftwareSerial RX=D2, TX=D3, 9600 8N1
+ * ESP32 link: SoftwareSerial RX=D2, TX=D3, 4800 8N1
  * Desktop/operator USB link: Serial at 115200
  *
  * Educational ATM controller only. No real PIN pad, card reader, cash hardware,
