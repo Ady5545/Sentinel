@@ -28,15 +28,15 @@ static const unsigned long USB_BAUD = 115200;
 static const unsigned long HEARTBEAT_MS = 500;
 static const unsigned long HELLO_RETRY_MS = 1000;
 static const unsigned long GUARDIAN_TIMEOUT_MS = 2600;
-static const unsigned long pinEntryTimeoutMs = 30000;
-static const unsigned long sessionTimeoutMs = 60000;
-static const unsigned long pinLockoutMs = 60000;
-static const unsigned long budgetWindowMs = 86400000UL;
+static const unsigned long DEFAULT_PIN_ENTRY_TIMEOUT_MS = 30000UL;
+static const unsigned long DEFAULT_SESSION_TIMEOUT_MS = 60000UL;
+static const unsigned long DEFAULT_PIN_LOCKOUT_MS = 60000UL;
+static const unsigned long DEFAULT_BUDGET_WINDOW_MS = 86400000UL;
 static const uint32_t DEFAULT_MAX_WITHDRAWAL = 20000UL;
 static const uint32_t DEFAULT_WINDOW_LIMIT = 40000UL;
 static const uint8_t MAX_ACCOUNTS = 4;
 static const uint8_t MAX_PIN_LENGTH = 6;
-static const uint8_t maxPinFailures = 3;
+static const uint8_t DEFAULT_MAX_PIN_FAILURES = 3;
 static const size_t FRAME_MAX = 120;
 static const size_t USB_LINE_MAX = 96;
 static const uint8_t JOURNAL_SIZE = 8;
@@ -79,11 +79,11 @@ char activeCardId[17] = {0};
 int8_t activeAccount = -1;
 uint32_t maxWithdrawal = DEFAULT_MAX_WITHDRAWAL;
 uint32_t windowLimit = DEFAULT_WINDOW_LIMIT;
-unsigned long budgetWindowMs = DEFAULT_budgetWindowMs;
-unsigned long pinEntryTimeoutMs = DEFAULT_pinEntryTimeoutMs;
-unsigned long sessionTimeoutMs = DEFAULT_sessionTimeoutMs;
-unsigned long pinLockoutMs = DEFAULT_pinLockoutMs;
-uint8_t maxPinFailures = DEFAULT_maxPinFailures;
+unsigned long budgetWindowMs = DEFAULT_BUDGET_WINDOW_MS;
+unsigned long pinEntryTimeoutMs = DEFAULT_PIN_ENTRY_TIMEOUT_MS;
+unsigned long sessionTimeoutMs = DEFAULT_SESSION_TIMEOUT_MS;
+unsigned long pinLockoutMs = DEFAULT_PIN_LOCKOUT_MS;
+uint8_t maxPinFailures = DEFAULT_MAX_PIN_FAILURES;
 uint32_t windowWithdrawn = 0;
 uint32_t budgetWindowStartedAt = 0;
 uint32_t pinEntryStartedAt = 0;
@@ -258,7 +258,8 @@ bool parseUnsigned(const char *text, uint32_t maximum, uint32_t &value) {
   for (size_t i = 0; text[i]; ++i) {
     if (text[i] < '0' || text[i] > '9') return false;
     const uint8_t digit = (uint8_t)(text[i] - '0');
-    if (result > (maximum - digit) / 10UL) return false;
+    if (result > maximum / 10UL ||
+        (result == maximum / 10UL && digit > maximum % 10UL)) return false;
     result = result * 10UL + digit;
   }
   if (result > maximum) return false;
