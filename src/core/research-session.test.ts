@@ -55,12 +55,18 @@ function withdrawLifecycle(s: ResearchSessionState): ResearchSessionState {
   s = boardEvent(s, { kind: 'line', device: 'sentinel', sessionId: 'esp-session-1', at: 220,
     line: '[PERMIT] One-shot observation issued for T0000001; amount=500',
     parsed: { type: 'PERMIT', id: 'T0000001', amount: 500 } });
+  s = boardEvent(s, { kind: 'line', device: 'uno', sessionId: 'uno-session-1', at: 230,
+    line: 'ATM_EVENT|WITHDRAWAL_APPROVED|id=T0000001;amount=500;balance=49500',
+    parsed: { type: 'ATM_EVENT', eventName: 'WITHDRAWAL_APPROVED', id: 'T0000001', amount: 500, balance: 49500 } });
   s = boardEvent(s, { kind: 'line', device: 'sentinel', sessionId: 'esp-session-1', at: 240,
     line: '[RECONCILE] Matching controller-reported virtual commit id=T0000001;amount=500',
     parsed: { type: 'COMMIT_RECONCILIATION', id: 'T0000001', amount: 500 } });
+  s = boardEvent(s, { kind: 'line', device: 'sentinel', sessionId: 'esp-session-1', at: 245,
+    line: '[COMMIT_ACK_TX] ACK sequence=8 acknowledges UNO EVENT sequence=7; id=T0000001; amount=500',
+    parsed: { type: 'COMMIT_ACK_SENT', id: 'T0000001', amount: 500 } });
   s = boardEvent(s, { kind: 'line', device: 'uno', sessionId: 'uno-session-1', at: 250,
-    line: 'ATM_EVENT|WITHDRAWAL_APPROVED|id=T0000001;amount=500;balance=49500',
-    parsed: { type: 'ATM_EVENT', eventName: 'WITHDRAWAL_APPROVED', id: 'T0000001', amount: 500, balance: 49500 } });
+    line: '[COMMIT_ACK] Exact guardian acknowledgement accepted for id=T0000001; amount=500',
+    parsed: { type: 'UNO_ACK_ACCEPTED', id: 'T0000001', amount: 500 } });
   return s;
 }
 
