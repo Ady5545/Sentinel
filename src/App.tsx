@@ -434,7 +434,7 @@ export default function App() {
         </div>
       </header>
       <div className="page-body">
-        {view === 'terminal' && <TerminalView state={state} dispatch={dispatch} />}
+        {view === 'terminal' && <TerminalView state={state} dispatch={dispatch} onRunSecurityDemo={() => { dispatch({ type: 'RESET_SCENARIO' }); dispatch({ type: 'SET_MODE', mode: 'protected' }); dispatch({ type: 'RUN_COMPROMISE_SCENARIO' }); navigateTo('experiments'); }} />}
         {view === 'machine' && <MachineView state={state} boards={boards} />}
         {view === 'sentinel' && <SentinelView state={state} boards={boards} />}
         {view === 'experiments' && <><ExperimentView state={state} dispatch={dispatch} /><ResearchRunPanel run={researchRun} scenarioRuns={scenarioRuns} onReplay={replayScenario} /></>}
@@ -464,7 +464,7 @@ function PanelTitle({ icon, title, suffix }: { icon: ReactNode; title: string; s
   return <div className="panel-title"><span>{icon}{title}</span>{suffix && <small>{suffix}</small>}</div>;
 }
 
-function TerminalView({ state, dispatch }: { state: AtmState; dispatch: Dispatch<AtmAction> }) {
+function TerminalView({ state, dispatch, onRunSecurityDemo }: { state: AtmState; dispatch: Dispatch<AtmAction>; onRunSecurityDemo: () => void }) {
   const [pinEntry, setPinEntry] = useState('');
   useEffect(() => {
     if (state.screen !== 'pin') setPinEntry('');
@@ -481,6 +481,15 @@ function TerminalView({ state, dispatch }: { state: AtmState; dispatch: Dispatch
   const cancel = () => { setPinEntry(''); dispatch({ type: 'CANCEL_SESSION' }); };
   return <>
     <ScreenHeading number="01" eyebrow="CUSTOMER ENVIRONMENT" title="ATM terminal" description={state.mode === "baseline" ? "SOFTWARE-ONLY UNPROTECTED BASELINE. Never controls connected hardware." : "Protected software simulation. Hardware-in-the-loop remains separate until the board bridge is qualified."} action={<button className="quiet-button" onClick={cancel}><RotateCcw size={14} /> End session</button>} />
+    <section className="presentation-banner" aria-label="Guided SENTINEL security demonstration">
+      <div className="presentation-banner-top"><span className="presentation-live"><i /> GUIDED SECURITY RUN</span><span className="presentation-id">SENTINEL / ATM-001</span></div>
+      <div className="presentation-banner-body">
+        <div className="presentation-copy"><div className="presentation-eyebrow">ATM SECURITY · CONTROLLED SCENARIO</div><h2>See the protection sequence.</h2><p>Run a repeatable controller-compromise scenario and follow the evidence, authority decision, and dispenser outcome in one connected workspace.</p>
+          <div className="presentation-steps"><span><b>01</b> Detect anomaly</span><span><b>02</b> Revoke authority</span><span><b>03</b> Block dispense</span></div>
+        </div>
+        <button className="presentation-launch" onClick={onRunSecurityDemo}><span className="presentation-launch-icon"><ShieldCheck size={19} /></span><span><strong>Run security sequence</strong><small>Open the live result view</small></span><ArrowRight size={17} /></button>
+      </div>
+    </section>
     <div className="terminal-layout">
       <section className="terminal-hardware">
         <div className="hardware-label"><span>ATM UNIT / ATM-001</span><span>MODEL PROFILE 01</span></div>
