@@ -16,7 +16,7 @@ The Uno hosts the ATM workflow for fictional RAM-only accounts. The ESP32 indepe
 - LOCKED: the temporary PIN lockout is active.
 - GUARDIAN_LOCKED: guardian revocation, protocol invalidity or link timeout is latched; a clean paired restart is required.
 
-A session expires after 60 seconds of customer inactivity. Three failed PIN attempts temporarily lock the demo account for 60 seconds. PIN failures are also sent as board-reported evidence so the ESP32 can apply a broader attempt-rate threshold. The Uno accepts no transaction while the guardian link is stale or revoked.
+A session expires after 60 seconds of customer inactivity. The default is three failed PIN attempts followed by a 60-second temporary lockout; both values are runtime-configurable in the full policy form. PIN change requires an authenticated session, the current PIN, a valid new PIN and matching confirmation. PIN failures are also sent as board-reported evidence so the ESP32 can apply a broader attempt-rate threshold. The Uno accepts no transaction while the guardian link is stale or revoked.
 
 ## Runtime configuration instead of embedded credentials
 
@@ -30,8 +30,8 @@ USB serial: 115200 baud, one command per newline.
 
 - ADD_ACCOUNT CARD_ID PIN START_BALANCE
 - SET_CASH COUNT_500 COUNT_200 COUNT_100 COUNT_50
-- SET_POLICY MAX_PER_TXN WINDOW_LIMIT
-- CARD CARD_ID, PIN PIN, BALANCE, WITHDRAW AMOUNT, CANCEL, LOGOUT, STATUS, JOURNAL, HELP
+- SET_POLICY MAX_PER_TXN WINDOW_LIMIT (short form), or SET_POLICY MAX_PER_TXN WINDOW_LIMIT WINDOW_MS PIN_TRIES LOCKOUT_MS PIN_TIMEOUT_MS SESSION_TIMEOUT_MS GUARDIAN_TIMEOUT_MS TX_TIMEOUT_MS (full form)
+- CARD CARD_ID, PIN PIN, CHANGE_PIN CURRENT_PIN NEW_PIN CONFIRM_NEW_PIN, BALANCE, WITHDRAW AMOUNT, CANCEL, LOGOUT, STATUS, JOURNAL, HELP
 - FIXTURE_MISMATCH injects a labelled synthetic event and is a test-only control.
 
 Amounts are integer INR demo amounts. Withdrawals must be positive multiples of ₹50 and must pass authentication, account balance, the controller-side policy, the configured note inventory and guardian-side authorization. Note inventory is virtual only. There is no physical output pin for money.
@@ -50,6 +50,8 @@ ESP32 → UNO: HELLO, ACK, STATUS, PERMIT, DENY, REVOKE
 For a withdrawal, the Uno transitions to WITHDRAW_PENDING, emits a unique increasing transaction ID and amount, and sends a framed REQUEST. The guardian requires fresh heartbeat evidence, the expected state, an authenticated-state report, a valid unseen transaction ID, denomination rules, and its own per-transaction/window limits. A valid request receives PERMIT id=<transaction-id>; policy rejection receives a correlated DENY. The Uno commits its RAM-only balance and note inventory only if a fresh PERMIT matches the exact pending ID. The guardian then expects a matching commit report within a timeout, otherwise it latches REVOKE. Any malformed/unknown frames, sequence gaps, illegal state changes, heartbeat timeout, replay, failed commit reconciliation, or labelled test fixture revokes guardian authority.
 
 This is stronger than generic permit freshness, but the guardian sees the Uno's state and authentication result as **reported by the Uno**. Those reports do not independently prove that a PIN was entered or that firmware is genuine. The desktop app must independently enforce the virtual dispenser gate and ensure account/cash state cannot mutate on DENY, REVOKE, timeout, stale permission or invalid evidence.
+
+The Uno's full policy form accepts budget window 60,000–86,400,000 ms, PIN failure threshold 1–10, lockout 5,000–900,000 ms, PIN-entry timeout 5,000–120,000 ms, session timeout 10,000–600,000 ms, guardian-link timeout 1,800–30,000 ms, and transaction-decision timeout 500–10,000 ms. The guardian has its own full policy command and its commit timeout should match the Uno transaction-decision timeout.
 
 ## Validation sequence
 
