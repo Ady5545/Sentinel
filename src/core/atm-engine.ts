@@ -243,7 +243,8 @@ export function atmReducer(state: AtmState, action: AtmAction): AtmState {
       const permit = state.simulationPermit;
       const permitValid = !isBaseline && Boolean(permit &&
         permit.transactionId === pending.id && permit.amount === pending.amount &&
-        nowMs <= permit.expiresAtMs && permit.evidenceSource === 'SIMULATED' &&
+        permit.issuedAtMs <= nowMs && nowMs < permit.expiresAtMs &&
+        permit.expiresAtMs > permit.issuedAtMs && permit.evidenceSource === 'SIMULATED' &&
         state.lastDecision === 'PERMIT' && state.sentinelStatus === 'MONITORING' &&
         state.controllerState === 'READY' && !state.scenarioApplied);
       if (!isBaseline && !permitValid) {
