@@ -167,7 +167,7 @@ describe('coordinated research session', () => {
     const switched = researchSessionReducer(s, { type: 'SET_MODE', mode: 'HIL', runId: 'RUN-HIL-2', at: 30 });
     expect(switched.mode).toBe('HIL');
     expect(switched.runId).toBe('RUN-HIL-2');
-    expect(replayRunRecords(switched.records, 'RUN-SIM-1')).toHaveLength(2);
+    expect(replayRunRecords(switched.records, 'RUN-SIM-1').map(record => record.kind)).toEqual(['RUN_STARTED', 'SIMULATION_EVENT', 'RUN_ENDED']);
   });
 
   it('does not copy PIN values or raw command arguments into immutable records', () => {
