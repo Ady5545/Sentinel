@@ -59,3 +59,15 @@ test("protocol documentation requires a matched pair and idempotent retries", ()
   assert.match(protocol, /withholds the session REVOKE frame because the Uno may not have received the final ACK yet/i);
   assert.match(esp, /if \(heartbeatSeen\) sendFrame\("REVOKE", "POLICY_REVOKE"\)/);
 });
+
+test("Uno serializes heartbeat/status traffic for SoftwareSerial", () => {
+  assert.match(uno, /bool awaitingGuardianStatus = false;/);
+  assert.match(uno, /awaitingGuardianStatus = true;/);
+  assert.match(uno, /if \(!awaitingGuardianStatus &&[\s\S]*sendHeartbeat\(now\)/);
+  const statusBranch = uno.indexOf('if (STREQ(type, "STATUS"))');
+  assert.ok(statusBranch >= 0, "Uno must have a STATUS receive branch");
+  assert.match(uno.slice(statusBranch, statusBranch + 500), /awaitingGuardianStatus = false/);
+  assert.match(esp, /if \(!revokeLatched\) sendFrame\("STATUS", "HEALTHY"\);/);
+  assert.match(protocol, /at most one outstanding HEARTBEAT/i);
+  assert.match(protocol, /waits for STATUS before sending the next heartbeat/i);
+});
