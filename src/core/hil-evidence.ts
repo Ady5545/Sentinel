@@ -65,6 +65,37 @@ export function reduceStructuredHilTransaction(
     return reduceHilTransaction(current, device,
       '[AUDIT] Matching controller-reported virtual transaction commit observed;id=' + id + ';amount=' + amount);
   }
+  if (event.type === 'COMMIT_ACK_SENT' || event.type === 'UNO_ACK_ACCEPTED') {
+    const expectedDevice = event.type === 'COMMIT_ACK_SENT' ? 'sentinel' : 'uno';
+    const flag = event.type === 'COMMIT_ACK_SENT' ? 'guardianAckSentSeen' : 'unoAckAcceptedSeen';
+    const eventLabel = event.type === 'COMMIT_ACK_SENT' ? 'Guardian ACK transmission' : 'Uno ACK acceptance';
+    if (device !== expectedDevice) {
+      return current
+        ? { ...current, phase: 'MISMATCH', message: eventLabel + ' evidence came from the wrong board role.' }
+        : mismatch(id, Number(amount), eventLabel + ' evidence came from the wrong board role.');
+    }
+    if (!current) return mismatch(id, Number(amount), eventLabel + ' arrived without an active transaction.');
+    if (!id || id !== current.id || !Number.isSafeInteger(event.amount) || event.amount !== current.amount) {
+      return {
+        ...current,
+        phase: 'MISMATCH',
+        message: eventLabel + ' did not match the active transaction ID and amount.'
+      };
+    }
+    if (current.phase === 'MISMATCH' || current.phase === 'REVOKED') return current;
+    if (current.phase === 'DENIED') {
+      return { ...current, phase: 'MISMATCH', message: eventLabel + ' conflicts with an already denied transaction.' };
+    }
+    if (current[flag]) return current;
+    const updated: HilTransaction = { ...current, [flag]: true };
+    updated.phase = phaseFromEvidence(updated);
+    return {
+      ...updated,
+      message: updated.phase === 'RECONCILED'
+        ? 'The matching permit, Uno commit, guardian reconciliation, guardian ACK transmission, and Uno ACK acceptance are all observed.'
+        : eventLabel + ' matches. Desktop cash remains unchanged until every required transaction-bound event is present.'
+    };
+  }
   if (event.type === 'AUTHORITY_REVOKED') {
     return reduceHilTransaction(current, device, '[REVOKE]');
   }
