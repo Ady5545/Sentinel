@@ -154,6 +154,9 @@ export function reduceResearchRun(run: ResearchRunRecord, action: ResearchAction
     if (!/^[A-Za-z0-9_-]{1,80}$/.test(action.transactionId) || !Number.isSafeInteger(action.amount) || action.amount <= 0) {
       return mismatch(run, action.transactionId, action.amount, 'Malformed HIL request ID or amount.', at, 'UNO');
     }
+    if (run.processedTransactionIds.includes(action.transactionId)) {
+      return mismatch(run, action.transactionId, action.amount, 'A previously committed transaction ID was reused; duplicate IDs cannot mutate the shadow again.', at, 'UNO');
+    }
     if (run.activeTransaction && !['RECONCILED', 'DENIED'].includes(run.activeTransaction.phase)) {
       return mismatch(run, action.transactionId, action.amount, 'A second HIL request arrived before the prior transaction reached a terminal state.', at, 'UNO');
     }
@@ -206,9 +209,9 @@ export function reduceResearchRun(run: ResearchRunRecord, action: ResearchAction
 function maybeReconcile(run: ResearchRunRecord, at: string): ResearchRunRecord {
   const tx = run.activeTransaction;
   if (!tx || tx.phase !== 'RECONCILED') return run;
-  if (run.processedTransactionIds.includes(tx.id)) {
-    return freeze(run, 'Duplicate transaction ID attempted to mutate the shadow twice.', at, 'SYSTEM');
-  }
+  // Exact duplicate commit/ACK observations are idempotent: retain the immutable
+  // event history, but never increment the shadow update count twice.
+  if (run.processedTransactionIds.includes(tx.id)) return run;
   return appendEvent({
     ...run,
     processedTransactionIds: [...run.processedTransactionIds, tx.id],
@@ -279,8 +282,13 @@ export function replaySyntheticScenario(scenario: SyntheticScenario, runId: stri
     else if (step.type === 'DENY') run = reduceResearchRun(run, { type: 'HIL_DENY', role: 'UNO', sessionId: unoSession, transactionId: id, amount: step.amount ?? 0, reason: step.reason || 'SYNTHETIC_DENIAL', at: stepAt });
     else if (step.type === 'FAULT') run = reduceResearchRun(run, { type: 'FAULT', role: 'LAB', reason: step.reason || 'SYNTHETIC_FAULT', at: stepAt });
   }
-  return appendEvent({ ...run, mode: 'SOFTWARE_ONLY' }, 'LAB', 'SCENARIO_REPLAY_FINISHED',
-    'Fixture replay completed; all events retain SYNTHETIC_FIXTURE or HOST_DERIVED provenance.', 'SYNTHETIC_FIXTURE',
+  const fixtureEvents = run.events.map(event => Object.freeze({
+    ...event,
+    provenance: event.role === 'UNO' || event.role === 'SENTINEL' ? 'SYNTHETIC_FIXTURE' as const : event.provenance
+  }));
+  run = { ...run, mode: 'SOFTWARE_ONLY', events: fixtureEvents };
+  return appendEvent(run, 'LAB', 'SCENARIO_REPLAY_FINISHED',
+    'Fixture replay completed; all board-like events are labelled SYNTHETIC_FIXTURE, not physical board evidence.', 'SYNTHETIC_FIXTURE',
     new Date(Date.parse(at) + (scenario.steps.length + 2) * 10).toISOString());
 }
 
