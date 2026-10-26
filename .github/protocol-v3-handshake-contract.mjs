@@ -83,7 +83,8 @@ test("Uno serializes heartbeat/status traffic for SoftwareSerial", () => {
   assert.match(uno, /lastGuardianStatusSequence\s*!=\s*0/);
   assert.match(uno, /MAX_INITIAL_STATUS_FRAME_DROPS\s*=\s*3/);
   assert.match(protocol, /at most one.{0,80}HEARTBEAT/i);
-  assert.match(protocol, /clears the outstanding-heartbeat flag only after receiving and validating that STATUS/i);
+  assert.match(protocol, /clears the outstanding-heartbeat flag only after receiving and validating a STATUS/i);
+  assert.match(uno, /if\s*\(sendFrame\(F\("HEARTBEAT"\),\s*payload\)\)\s*\{[\s\S]{0,180}lastHeartbeatAt\s*=\s*millis\(\)/);
 });
 
 test("both boards use the same slower peer UART and bounded status retry contract", () => {
