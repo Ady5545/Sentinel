@@ -6,7 +6,7 @@ on:
     paths:
       - "firmware/**"
       - ".github/protocol-v3-handshake-contract.mjs"
-      - ".github/protocol-v3-model.test.mjs"
+      - ".github/protocol-v3-model.node.mjs"
       - "docs/SENTINEL_PROTOCOL.md"
       - ".github/workflows/firmware-build.yml"
   pull_request:
@@ -62,4 +62,4 @@ jobs:
         with:
           node-version: 20
       - name: Run protocol contract tests
-        run: node --test .github/protocol-v3-handshake-contract.mjs .github/protocol-v3-model.test.mjs
+        run: node --test .github/protocol-v3-handshake-contract.mjs .github/protocol-v3-model.node.mjs
