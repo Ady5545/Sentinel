@@ -269,7 +269,7 @@ void revoke(const char *reason) {
   Serial.print(F("[REVOKE] "));
   Serial.println(reason);
   // A peer that has not completed negotiation cannot safely correlate a REVOKE frame.
-  if (handshakeConfirmed) sendFrame("REVOKE", "POLICY_REVOKE");
+  if (heartbeatSeen) sendFrame("REVOKE", "POLICY_REVOKE");
 }
 
 void denyRequest(const char *id, const char *reason) {
