@@ -56,5 +56,6 @@ test("ESP32 gates transaction requests on completed negotiation", () => {
 test("protocol documentation requires a matched pair and idempotent retries", () => {
   assert.match(protocol, /both board sketches must be flashed as a matched pair/i);
   assert.match(protocol, /retries reuse the original sequence and payload/i);
-  assert.match(protocol, /does not transmit a session REVOKE that the Uno cannot reliably correlate/i);
+  assert.match(protocol, /withholds the session REVOKE frame because the Uno may not have received the final ACK yet/i);
+  assert.match(esp, /if \(heartbeatSeen\) sendFrame\("REVOKE", "POLICY_REVOKE"\)/);
 });
