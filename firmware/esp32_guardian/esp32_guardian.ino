@@ -17,15 +17,16 @@ static const int PEER_RX_PIN = 16;
 static const int PEER_TX_PIN = 17;
 static const unsigned long PEER_BAUD = 9600;
 static const unsigned long USB_BAUD = 115200;
-static const unsigned long HEARTBEAT_TIMEOUT_MS = 1800;
-static const unsigned long LINK_TIMEOUT_MS = 2600;
-static const unsigned long STATUS_INTERVAL_MS = 2000;
-static const unsigned long COMMIT_TIMEOUT_MS = 1800;
-static const unsigned long PIN_FAILURE_WINDOW_MS = 60000;
-static const uint8_t PIN_FAILURES_PER_WINDOW = 9;
+static const unsigned long DEFAULT_HEARTBEAT_TIMEOUT_MS = 1800UL;
+static const unsigned long DEFAULT_LINK_TIMEOUT_MS = 2600UL;
+static const unsigned long USB_STATUS_INTERVAL_MS = 2000UL;
+static const unsigned long PEER_STATUS_INTERVAL_MS = 1000UL;
+static const unsigned long DEFAULT_COMMIT_TIMEOUT_MS = 1800UL;
+static const unsigned long DEFAULT_PIN_FAILURE_WINDOW_MS = 60000UL;
+static const uint8_t DEFAULT_PIN_FAILURES_PER_WINDOW = 9;
 static const uint32_t DEFAULT_MAX_TRANSACTION = 20000UL;
 static const uint32_t DEFAULT_WINDOW_LIMIT = 40000UL;
-static const unsigned long BUDGET_WINDOW_MS = 86400000UL;
+static const unsigned long DEFAULT_BUDGET_WINDOW_MS = 86400000UL;
 static const size_t FRAME_MAX = 120;
 static const size_t USB_LINE_MAX = 96;
 
@@ -43,10 +44,17 @@ uint32_t lastUnoSequence = 0;
 uint32_t lastValidUnoAt = 0;
 uint32_t lastHeartbeatAt = 0;
 uint32_t lastStatusAt = 0;
+uint32_t lastPeerStatusAt = 0;
 uint32_t budgetWindowStartedAt = 0;
 uint32_t approvedWindowAmount = 0;
 uint32_t maxTransaction = DEFAULT_MAX_TRANSACTION;
 uint32_t windowLimit = DEFAULT_WINDOW_LIMIT;
+unsigned long heartbeatTimeoutMs = DEFAULT_HEARTBEAT_TIMEOUT_MS;
+unsigned long linkTimeoutMs = DEFAULT_LINK_TIMEOUT_MS;
+unsigned long commitTimeoutMs = DEFAULT_COMMIT_TIMEOUT_MS;
+unsigned long pinFailureWindowMs = DEFAULT_PIN_FAILURE_WINDOW_MS;
+uint8_t pinFailuresPerWindow = DEFAULT_PIN_FAILURES_PER_WINDOW;
+unsigned long budgetWindowMs = DEFAULT_BUDGET_WINDOW_MS;
 uint32_t lastTransactionNumber = 0;
 uint32_t pendingPermitAmount = 0;
 uint32_t pendingPermitStartedAt = 0;
@@ -121,6 +129,11 @@ bool parseFrame(char *line, char fields[5][48], uint32_t &seqOut) {
   if (len < 12 || len > FRAME_MAX - 2) return false;
   char *lastSep = strrchr(line, '|');
   if (!lastSep || strlen(lastSep + 1) != 4) return false;
+  for (const char *digit = lastSep + 1; *digit; ++digit) {
+    if (!((*digit >= '0' && *digit <= '9') ||
+          (*digit >= 'A' && *digit <= 'F') ||
+          (*digit >= 'a' && *digit <= 'f'))) return false;
+  }
   char *end = NULL;
   const unsigned long receivedCrc = strtoul(lastSep + 1, &end, 16);
   if (!end || *end != '\0' || receivedCrc > 0xFFFF) return false;
@@ -150,7 +163,8 @@ bool parseUnsigned(const char *text, uint32_t maximum, uint32_t &value) {
   for (size_t i = 0; text[i]; ++i) {
     if (text[i] < '0' || text[i] > '9') return false;
     const uint8_t digit = (uint8_t)(text[i] - '0');
-    if (result > (maximum - digit) / 10UL) return false;
+    if (result > maximum / 10UL ||
+        (result == maximum / 10UL && digit > maximum % 10UL)) return false;
     result = result * 10UL + digit;
   }
   if (result > maximum) return false;
@@ -259,6 +273,10 @@ void handleState(const char *payload) {
     revoke("Invalid STATE transaction counter.");
     return;
   }
+  if (txCount != committedTransactions) {
+    revoke("Controller-reported committed transaction count diverged from guardian observations.");
+    return;
+  }
   if (!transitionAllowed(lastAtmState, nextState)) {
     revoke("Illegal ATM state transition.");
     return;
@@ -302,12 +320,12 @@ void handleEvent(const char *payload) {
   }
   if (strstr(payload, "event=PIN_FAIL") != NULL) {
     const uint32_t now = millis();
-    if ((uint32_t)(now - pinFailureWindowStartedAt) > PIN_FAILURE_WINDOW_MS) {
+    if ((uint32_t)(now - pinFailureWindowStartedAt) > pinFailureWindowMs) {
       pinFailureWindowStartedAt = now;
       pinFailuresInWindow = 0;
     }
     if (pinFailuresInWindow < 255) ++pinFailuresInWindow;
-    if (pinFailuresInWindow > PIN_FAILURES_PER_WINDOW) {
+    if (pinFailuresInWindow >= pinFailuresPerWindow) {
       revoke("Independent guardian PIN-failure rate threshold exceeded.");
       return;
     }
@@ -358,7 +376,7 @@ void handleRequest(const char *payload) {
     revoke("Dispense request without an observed authenticated pending state.");
     return;
   }
-  if (!heartbeatSeen || (uint32_t)(millis() - lastHeartbeatAt) > HEARTBEAT_TIMEOUT_MS) {
+  if (!heartbeatSeen || (uint32_t)(millis() - lastHeartbeatAt) > heartbeatTimeoutMs) {
     revoke("Transaction request arrived without a fresh heartbeat.");
     return;
   }
@@ -371,7 +389,7 @@ void handleRequest(const char *payload) {
     denyRequest(id, "TX_LIMIT");
     return;
   }
-  if ((uint32_t)(millis() - budgetWindowStartedAt) >= BUDGET_WINDOW_MS) {
+  if ((uint32_t)(millis() - budgetWindowStartedAt) >= budgetWindowMs) {
     budgetWindowStartedAt = millis();
     approvedWindowAmount = 0;
   }
@@ -496,11 +514,11 @@ void handleUsbCommand(char *line) {
   strncpy(work, line, sizeof(work) - 1);
   work[sizeof(work) - 1] = '\0';
   for (size_t i = 0; work[i]; ++i) work[i] = (char)toupper((unsigned char)work[i]);
-  char *argv[5] = {0};
+  char *argv[9] = {0};
   uint8_t argc = 0;
   char *save = NULL;
   char *part = strtok_r(work, " \t", &save);
-  while (part && argc < 5) {
+  while (part && argc < 9) {
     argv[argc++] = part;
     part = strtok_r(NULL, " \t", &save);
   }
@@ -510,23 +528,44 @@ void handleUsbCommand(char *line) {
     // empty line
   } else if (strcmp(argv[0], "STATUS") == 0 && argc == 1) {
     printStatus();
-  } else if (strcmp(argv[0], "SET_LIMITS") == 0 && argc == 3 && !awaitingCommit) {
+  } else if ((strcmp(argv[0], "SET_LIMITS") == 0 && argc == 3 ||
+              strcmp(argv[0], "SET_POLICY") == 0 && argc == 9) && !awaitingCommit) {
     uint32_t maxValue = 0, windowValue = 0;
-    if (parseUnsigned(argv[1], 1000000UL, maxValue) &&
-        parseUnsigned(argv[2], 1000000UL, windowValue) &&
-        maxValue > 0 && windowValue >= maxValue) {
+    bool valid = parseUnsigned(argv[1], 1000000UL, maxValue) &&
+                 parseUnsigned(argv[2], 1000000UL, windowValue) &&
+                 maxValue > 0 && windowValue >= maxValue;
+    uint32_t hbValue = heartbeatTimeoutMs, linkValue = linkTimeoutMs;
+    uint32_t budgetValue = budgetWindowMs, pinFailValue = pinFailuresPerWindow;
+    uint32_t pinWindowValue = pinFailureWindowMs, commitValue = commitTimeoutMs;
+    if (valid && argc == 9) {
+      valid = parseUnsigned(argv[3], 10000UL, hbValue) && hbValue >= 500UL &&
+              parseUnsigned(argv[4], 30000UL, linkValue) && linkValue > hbValue &&
+              parseUnsigned(argv[5], 86400000UL, budgetValue) && budgetValue >= 60000UL &&
+              parseUnsigned(argv[6], 30UL, pinFailValue) && pinFailValue >= 3UL &&
+              parseUnsigned(argv[7], 600000UL, pinWindowValue) && pinWindowValue >= 10000UL &&
+              parseUnsigned(argv[8], 10000UL, commitValue) && commitValue >= 500UL;
+    }
+    if (valid) {
       maxTransaction = maxValue;
       windowLimit = windowValue;
+      if (argc == 9) {
+        heartbeatTimeoutMs = hbValue;
+        linkTimeoutMs = linkValue;
+        budgetWindowMs = budgetValue;
+        pinFailuresPerWindow = (uint8_t)pinFailValue;
+        pinFailureWindowMs = pinWindowValue;
+        commitTimeoutMs = commitValue;
+      }
       approvedWindowAmount = 0;
       budgetWindowStartedAt = millis();
-      Serial.println(F("[CONFIG] Guardian policy limits updated in RAM."));
+      Serial.println(F("[CONFIG] Guardian policy updated in RAM."));
     } else {
-      Serial.println(F("[CONFIG] Invalid limits; window limit must be >= transaction limit."));
+      Serial.println(F("[CONFIG] Invalid limits; require WINDOW >= MAX, LINK > HEARTBEAT, and values in documented ranges."));
     }
   } else if (strcmp(argv[0], "FIXTURE_REVOKE") == 0 && argc == 1) {
     revoke("SIMULATED: operator-injected guardian revocation fixture.");
   } else if (strcmp(argv[0], "HELP") == 0 && argc == 1) {
-    Serial.println(F("Commands: STATUS, SET_LIMITS <MAX_TXN> <WINDOW_LIMIT>, FIXTURE_REVOKE, HELP"));
+    Serial.println(F("Commands: STATUS, SET_LIMITS <MAX_TXN> <WINDOW_LIMIT>, SET_POLICY <MAX_TXN> <WINDOW_LIMIT> <HEARTBEAT_MS> <LINK_TIMEOUT_MS> <WINDOW_MS> <PIN_FAILS> <PIN_WINDOW_MS> <COMMIT_MS>, FIXTURE_REVOKE, HELP"));
     Serial.println(F("Limits are RAM-only. Restart both boards to clear a latched revoke."));
   } else {
     Serial.println(F("[COMMAND] Invalid command or arguments."));
@@ -573,17 +612,22 @@ void loop() {
   pollUsb();
 
   if (sessionEstablished && !revokeLatched && heartbeatSeen &&
-      (uint32_t)(now - lastHeartbeatAt) > HEARTBEAT_TIMEOUT_MS) {
+      (uint32_t)(now - lastHeartbeatAt) > heartbeatTimeoutMs) {
     revoke("UNO heartbeat timeout.");
   }
   if (sessionEstablished && !revokeLatched &&
-      (uint32_t)(now - lastValidUnoAt) > LINK_TIMEOUT_MS) {
+      (uint32_t)(now - lastValidUnoAt) > linkTimeoutMs) {
     revoke("UNO protocol traffic timeout.");
   }
-  if (awaitingCommit && (uint32_t)(now - pendingPermitStartedAt) > COMMIT_TIMEOUT_MS) {
+  if (awaitingCommit && (uint32_t)(now - pendingPermitStartedAt) > commitTimeoutMs) {
     revoke("Controller did not report the matching transaction commit.");
   }
-  if ((uint32_t)(now - lastStatusAt) >= STATUS_INTERVAL_MS) {
+  if (sessionEstablished && heartbeatSeen && !revokeLatched &&
+      (uint32_t)(now - lastPeerStatusAt) >= PEER_STATUS_INTERVAL_MS) {
+    sendFrame("STATUS", "HEALTHY");
+    lastPeerStatusAt = now;
+  }
+  if ((uint32_t)(now - lastStatusAt) >= USB_STATUS_INTERVAL_MS) {
     if (!sessionEstablished) Serial.println(F("[WAIT] Waiting for UNO-ATM-V2 HELLO; no transaction permit."));
     else printStatus();
     lastStatusAt = now;
