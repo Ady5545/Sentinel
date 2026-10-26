@@ -27,7 +27,7 @@ static const unsigned long PEER_BAUD = 9600;
 static const unsigned long USB_BAUD = 115200;
 static const unsigned long HEARTBEAT_MS = 500;
 static const unsigned long HELLO_RETRY_MS = 1000;
-static const unsigned long GUARDIAN_TIMEOUT_MS = 2600;
+static const unsigned long DEFAULT_GUARDIAN_TIMEOUT_MS = 2600UL;
 static const unsigned long DEFAULT_PIN_ENTRY_TIMEOUT_MS = 30000UL;
 static const unsigned long DEFAULT_SESSION_TIMEOUT_MS = 60000UL;
 static const unsigned long DEFAULT_PIN_LOCKOUT_MS = 60000UL;
@@ -80,6 +80,7 @@ int8_t activeAccount = -1;
 uint32_t maxWithdrawal = DEFAULT_MAX_WITHDRAWAL;
 uint32_t windowLimit = DEFAULT_WINDOW_LIMIT;
 unsigned long budgetWindowMs = DEFAULT_BUDGET_WINDOW_MS;
+unsigned long guardianTimeoutMs = DEFAULT_GUARDIAN_TIMEOUT_MS;
 unsigned long pinEntryTimeoutMs = DEFAULT_PIN_ENTRY_TIMEOUT_MS;
 unsigned long sessionTimeoutMs = DEFAULT_SESSION_TIMEOUT_MS;
 unsigned long pinLockoutMs = DEFAULT_PIN_LOCKOUT_MS;
@@ -324,7 +325,7 @@ bool guardianFresh() {
   return handshakeComplete && !guardianRevokeLatched &&
          guardianLink == LINK_OBSERVING &&
          lastGuardianFrameAt != 0 &&
-         (uint32_t)(millis() - lastGuardianFrameAt) <= GUARDIAN_TIMEOUT_MS;
+         (uint32_t)(millis() - lastGuardianFrameAt) <= guardianTimeoutMs;
 }
 
 void sendState() {
@@ -581,7 +582,7 @@ void printHelp() {
   Serial.println(F("SENTINEL ATM controller commands (fictional/demo data only):"));
   Serial.println(F("  ADD_ACCOUNT <CARD_ID> <4-6_DIGIT_PIN> <START_BALANCE>"));
   Serial.println(F("  SET_CASH <COUNT_500> <COUNT_200> <COUNT_100> <COUNT_50>"));
-  Serial.println(F("  SET_POLICY <MAX_TXN> <WINDOW_LIMIT> [WINDOW_MS PIN_TRIES LOCKOUT_MS PIN_TIMEOUT_MS SESSION_TIMEOUT_MS]"));
+  Serial.println(F("  SET_POLICY <MAX_TXN> <WINDOW_LIMIT> [WINDOW_MS PIN_TRIES LOCKOUT_MS PIN_TIMEOUT_MS SESSION_TIMEOUT_MS GUARDIAN_TIMEOUT_MS]"));
   Serial.println(F("  CARD <CARD_ID> | PIN <PIN> | BALANCE | WITHDRAW <AMOUNT>"));
   Serial.println(F("  CANCEL | LOGOUT | STATUS | JOURNAL | HELP | FIXTURE_MISMATCH"));
   Serial.println(F("Accounts/PINs/cash are RAM-only and are erased on reset."));
@@ -643,7 +644,8 @@ void handleSetPolicy(char **argv, uint8_t argc) {
   uint32_t newWindowMs = budgetWindowMs, newTries = maxPinFailures;
   uint32_t newLockoutMs = pinLockoutMs, newPinTimeoutMs = pinEntryTimeoutMs;
   uint32_t newSessionTimeoutMs = sessionTimeoutMs;
-  const bool fullPolicy = argc == 8;
+  uint32_t newGuardianTimeoutMs = guardianTimeoutMs;
+  const bool fullPolicy = argc == 9;
   if ((argc != 3 && !fullPolicy) || activeAccount >= 0 || atmState == ATM_WITHDRAW_PENDING ||
       !parseUnsigned(argv[1], 1000000UL, newMax) ||
       !parseUnsigned(argv[2], 1000000UL, newWindow) ||
@@ -656,7 +658,8 @@ void handleSetPolicy(char **argv, uint8_t argc) {
        !parseUnsigned(argv[4], 10UL, newTries) || newTries < 1 ||
        !parseUnsigned(argv[5], 900000UL, newLockoutMs) || newLockoutMs < 5000UL ||
        !parseUnsigned(argv[6], 120000UL, newPinTimeoutMs) || newPinTimeoutMs < 5000UL ||
-       !parseUnsigned(argv[7], 600000UL, newSessionTimeoutMs) || newSessionTimeoutMs < 10000UL)) {
+       !parseUnsigned(argv[7], 600000UL, newSessionTimeoutMs) || newSessionTimeoutMs < 10000UL ||
+       !parseUnsigned(argv[8], 30000UL, newGuardianTimeoutMs) || newGuardianTimeoutMs < 1800UL)) {
     emitEvent(F("CONFIG_DENIED"), F("reason=policy_value_out_of_safe_range"));
     return;
   }
@@ -670,6 +673,7 @@ void handleSetPolicy(char **argv, uint8_t argc) {
     pinLockoutMs = newLockoutMs;
     pinEntryTimeoutMs = newPinTimeoutMs;
     sessionTimeoutMs = newSessionTimeoutMs;
+    guardianTimeoutMs = newGuardianTimeoutMs;
   }
   emitEvent(F("POLICY_CONFIGURED"), F("window=uptime_based_demo_window"));
 }
@@ -827,11 +831,11 @@ void handleCommand(char *line) {
   work[sizeof(work) - 1] = '\0';
   for (size_t i = 0; work[i]; ++i) work[i] = (char)toupper((unsigned char)work[i]);
 
-  char *argv[8] = {0};
+  char *argv[9] = {0};
   uint8_t argc = 0;
   char *save = NULL;
   char *token = strtok_r(work, " \t", &save);
-  while (token && argc < 8) {
+  while (token && argc < 9) {
     argv[argc++] = token;
     token = strtok_r(NULL, " \t", &save);
   }
@@ -857,7 +861,7 @@ void handleCommand(char *line) {
     handleAddAccount(argv[1], argv[2], argv[3]);
   } else if (STREQ(argv[0], "SET_CASH") && argc == 5) {
     handleSetCash(argv[1], argv[2], argv[3], argv[4]);
-  } else if (STREQ(argv[0], "SET_POLICY") && (argc == 3 || argc == 8)) {
+  } else if (STREQ(argv[0], "SET_POLICY") && (argc == 3 || argc == 9)) {
     handleSetPolicy(argv, argc);
   } else if (STREQ(argv[0], "CARD") && argc == 2) {
     handleCard(argv[1]);
@@ -946,7 +950,7 @@ void loop() {
     sendHeartbeat(now);
 
   if (handshakeComplete && lastGuardianFrameAt != 0 &&
-      (uint32_t)(now - lastGuardianFrameAt) > GUARDIAN_TIMEOUT_MS) {
+      (uint32_t)(now - lastGuardianFrameAt) > guardianTimeoutMs) {
     enterGuardianLock(F("Guardian response timeout."));
   }
 
