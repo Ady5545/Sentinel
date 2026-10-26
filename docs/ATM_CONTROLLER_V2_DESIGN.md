@@ -50,6 +50,8 @@ Include PIN change success, wrong current PIN, confirmation mismatch, and policy
 - Electron app opens the correct serial port, provisions accounts in a controlled demo mode, masks PIN entry, parses output safely, and does not treat USB logs as cryptographic attestation.
 - Board restart resets RAM-only fictional accounts/policy and requires reprovisioning.
 
+The USB command port is a trusted maintenance interface in this version and is not separately administrator-authenticated. Demo PINs are plain strings in RAM during operation. These limitations must remain visible in the demo's threat model; do not represent the prototype as a secure bank ATM or use real credentials.
+
 ## Explicit non-goals
 
 No real banking, real customer data, actual card standards, secure PIN-entry device, secure element, persistent real account ledger, hardware-backed identity, cryptographic peer authentication, ESP32 secure boot/encrypted flash provisioning, physical dispenser or physical tamper sensors. No claim of foolproof/unhackable protection or arbitrary malware detection is permitted.
