@@ -872,10 +872,13 @@ void handleUsbCommand(char *line) {
     } else {
       Serial.println(F("[CONFIG] Invalid limits; require WINDOW >= MAX, LINK > HEARTBEAT, and values in documented ranges."));
     }
-  } else if (strcmp(argv[0], "FIXTURE_REVOKE") == 0 && argc == 1) {
+  } else if ((strcmp(argv[0], "FIXTURE_REVOKE") == 0 || strcmp(argv[0], "DEMO_ATTACK") == 0) && argc == 1) {
+    Serial.println(F("[DEMO] Controlled local software integrity-violation fixture triggered."));
+    Serial.println(F("[DEMO] This command does not assert that a UART event was received."));
     revoke("SIMULATED: operator-injected guardian revocation fixture.");
+    printStatus();
   } else if (strcmp(argv[0], "HELP") == 0 && argc == 1) {
-    Serial.println(F("Commands: STATUS, SET_LIMITS <MAX_TXN> <WINDOW_LIMIT>, SET_POLICY <MAX_TXN> <WINDOW_LIMIT> <HEARTBEAT_MS> <LINK_TIMEOUT_MS> <WINDOW_MS> <PIN_FAILS> <PIN_WINDOW_MS> <COMMIT_MS>, FIXTURE_REVOKE, HELP"));
+    Serial.println(F("Commands: STATUS, SET_LIMITS <MAX_TXN> <WINDOW_LIMIT>, SET_POLICY <MAX_TXN> <WINDOW_LIMIT> <HEARTBEAT_MS> <LINK_TIMEOUT_MS> <WINDOW_MS> <PIN_FAILS> <PIN_WINDOW_MS> <COMMIT_MS>, FIXTURE_REVOKE / DEMO_ATTACK, HELP"));
     Serial.println(F("Limits are RAM-only. Restart both boards to clear a latched revoke."));
   } else {
     Serial.println(F("[COMMAND] Invalid command or arguments."));
