@@ -13,6 +13,7 @@ on:
     paths:
       - "firmware/**"
       - ".github/protocol-v3-handshake-contract.mjs"
+      - ".github/protocol-v3-model.node.mjs"
       - "docs/SENTINEL_PROTOCOL.md"
       - ".github/workflows/firmware-build.yml"
   workflow_dispatch:
