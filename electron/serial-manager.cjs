@@ -91,11 +91,11 @@ function parseBoardLine(device, line) {
   // The guardian first records receipt/reconciliation, then reports its ACK transmission.
   // Final host completion also requires the Uno's exact ACK-accepted trace.
   if (device === 'sentinel') {
-    const ackSent = line.match(/^\\[COMMIT_ACK_TX\\] ACK sequence=(0|[1-9][0-9]*) acknowledges UNO EVENT sequence=(0|[1-9][0-9]*); id=([A-Za-z0-9_-]{1,16}); amount=(0|[1-9][0-9]*)$/);
+    const ackSent = line.match(/^\[COMMIT_ACK_TX\\] ACK sequence=(0|[1-9][0-9]*) acknowledges UNO EVENT sequence=(0|[1-9][0-9]*); id=([A-Za-z0-9_-]{1,16}); amount=(0|[1-9][0-9]*)$/);
     if (ackSent) return { type: 'COMMIT_ACK_SENT', id: safeId(ackSent[3]), amount: safeAmount(ackSent[4]) };
   }
   if (device === 'uno') {
-    const ackAccepted = line.match(/^\\[COMMIT_ACK\\] Exact guardian acknowledgement accepted for id=([A-Za-z0-9_-]{1,16}); amount=(0|[1-9][0-9]*)$/);
+    const ackAccepted = line.match(/^\[COMMIT_ACK\\] Exact guardian acknowledgement accepted for id=([A-Za-z0-9_-]{1,16}); amount=(0|[1-9][0-9]*)$/);
     if (ackAccepted) return { type: 'UNO_ACK_ACCEPTED', id: safeId(ackAccepted[1]), amount: safeAmount(ackAccepted[2]) };
   }
 
