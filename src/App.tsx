@@ -82,7 +82,10 @@ export default function App() {
       }));
       dispatchResearch({
         type: 'RESTORE_BRIDGE', mode: snapshot.researchMode, at: Date.now(),
-        boards: { uno: snapshot.boards.uno, sentinel: snapshot.boards.sentinel }
+        boards: { uno: snapshot.boards.uno, sentinel: snapshot.boards.sentinel },
+        hilFaultLatched: snapshot.hilFaultLatched,
+        faultResetBaseline: snapshot.faultResetBaseline,
+        boardBootEpochs: snapshot.boardBootEpochs
       });
     }).catch(() => undefined);
     const unsubscribe = api.onSerialEvent(event => {
