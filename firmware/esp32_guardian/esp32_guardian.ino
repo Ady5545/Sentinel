@@ -344,6 +344,8 @@ void handleHeartbeat(const char *payload) {
   if (!revokeLatched) {
     pendingHealthyStatus = true;
     healthyStatusDueAt = lastHeartbeatAt + HEALTHY_STATUS_TURNAROUND_MS;
+    Serial.print(F("[STATUS_TX] HEALTHY scheduled; due_ms="));
+    Serial.println(healthyStatusDueAt);
   }
 }
 
@@ -723,9 +725,19 @@ void loop() {
       (int32_t)(now - healthyStatusDueAt) >= 0) {
     pendingHealthyStatus = false;
     if (!revokeLatched && handshakeConfirmed) {
-      if (!sendFrame("STATUS", "HEALTHY")) {
+      Serial.print(F("[STATUS_TX] Sending STATUS HEALTHY; next_seq="));
+      Serial.println(txSequence + 1UL);
+      const bool sent = sendFrame("STATUS", "HEALTHY");
+      Serial.print(F("[STATUS_TX] sendFrame_return="));
+      Serial.println(sent ? F("true") : F("false"));
+      if (!sent) {
         revoke("Unable to transmit healthy guardian status.");
       }
+    } else {
+      Serial.print(F("[STATUS_TX] Skipped; revoked="));
+      Serial.print(revokeLatched ? F("yes") : F("no"));
+      Serial.print(F(" handshake="));
+      Serial.println(handshakeConfirmed ? F("yes") : F("no"));
     }
   }
 
