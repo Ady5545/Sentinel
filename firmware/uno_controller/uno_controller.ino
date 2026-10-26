@@ -1,5 +1,5 @@
 /*
- * SENTINEL ATM Controller Firmware v2
+ * SENTINEL ATM Controller Firmware v3
  * Target: Arduino Uno / ATmega328P
  * ESP32 link: SoftwareSerial RX=D2, TX=D3, 9600 8N1
  * Desktop/operator USB link: Serial at 115200
@@ -26,7 +26,7 @@ static const uint8_t PEER_TX_PIN = 3;
 static const unsigned long PEER_BAUD = 9600;
 static const unsigned long USB_BAUD = 115200;
 static const unsigned long HEARTBEAT_MS = 500;
-static const unsigned long HELLO_RETRY_MS = 1000;
+static const unsigned long HELLO_RETRY_MS = 650UL;
 static const unsigned long DEFAULT_GUARDIAN_TIMEOUT_MS = 2600UL;
 static const unsigned long DEFAULT_TRANSACTION_DECISION_TIMEOUT_MS = 1800UL;
 static const unsigned long DEFAULT_PIN_ENTRY_TIMEOUT_MS = 30000UL;
@@ -112,7 +112,9 @@ uint32_t lastGuardianFrameAt = 0;
 uint32_t lastGuardianStatusAt = 0;
 uint32_t lastHeartbeatAt = 0;
 uint32_t lastHelloAt = 0;
-bool handshakeComplete = false;
+bool guardianHelloSeen = false;
+bool handshakeComplete = false;  // True only after the final V3 handshake ACK.
+uint32_t helloRetryCount = 0;
 bool guardianRevokeLatched = false;
 bool statePublished = false;
 char journal[JOURNAL_SIZE][32];
@@ -184,19 +186,26 @@ void makeSession() {
   snprintf_P(sessionId, sizeof(sessionId), PSTR("U%08lX"), (unsigned long)micros());
 }
 
-bool sendFrame(const __FlashStringHelper *type, const char *payload) {
+bool sendFrameAtSequence(const __FlashStringHelper *type, const char *payload, uint32_t seq) {
+  if (seq == 0) {
+    Serial.println(F("[FAULT] Sequence zero is invalid."));
+    guardianRevokeLatched = true;
+    guardianLink = LINK_REVOKED;
+    atmState = ATM_GUARDIAN_LOCKED;
+    return false;
+  }
   char prefix[FRAME_MAX];
-  const uint32_t seq = ++txSequence;
-  const int n = snprintf_P(prefix, sizeof(prefix), PSTR("S2|%S|%s|%lu|%s"), type,
+  const int n = snprintf_P(prefix, sizeof(prefix), PSTR("S3|%S|%s|%lu|%s"), type,
                          sessionId, (unsigned long)seq,
                          (payload && payload[0]) ? payload : "-");
   if (n <= 0 || (size_t)n >= sizeof(prefix)) {
     Serial.println(F("[FAULT] Outgoing peer frame overflow."));
     guardianRevokeLatched = true;
     guardianLink = LINK_REVOKED;
-    if (atmState != ATM_GUARDIAN_LOCKED) atmState = ATM_GUARDIAN_LOCKED;
+    atmState = ATM_GUARDIAN_LOCKED;
     return false;
   }
+  if (seq > txSequence) txSequence = seq;
   const uint16_t crc = crc16CcittFalse((const uint8_t *)prefix, (size_t)n);
   GuardianSerial.print(prefix);
   GuardianSerial.print('|');
@@ -207,17 +216,25 @@ bool sendFrame(const __FlashStringHelper *type, const char *payload) {
   return true;
 }
 
-bool sendFrame(const __FlashStringHelper *type, const __FlashStringHelper *payload) {
-  char prefix[FRAME_MAX];
-  const uint32_t seq = ++txSequence;
-  const int n = snprintf_P(prefix, sizeof(prefix), PSTR("S2|%S|%s|%lu|%S"), type,
-                           sessionId, (unsigned long)seq, payload);
-  if (n <= 0 || (size_t)n >= sizeof(prefix)) {
+bool sendFrameAtSequence(const __FlashStringHelper *type,
+                          const __FlashStringHelper *payload, uint32_t seq) {
+  if (seq == 0) {
     guardianRevokeLatched = true;
     guardianLink = LINK_REVOKED;
     atmState = ATM_GUARDIAN_LOCKED;
     return false;
   }
+  char prefix[FRAME_MAX];
+  const int n = snprintf_P(prefix, sizeof(prefix), PSTR("S3|%S|%s|%lu|%S"), type,
+                           sessionId, (unsigned long)seq, payload);
+  if (n <= 0 || (size_t)n >= sizeof(prefix)) {
+    Serial.println(F("[FAULT] Outgoing peer frame overflow."));
+    guardianRevokeLatched = true;
+    guardianLink = LINK_REVOKED;
+    atmState = ATM_GUARDIAN_LOCKED;
+    return false;
+  }
+  if (seq > txSequence) txSequence = seq;
   const uint16_t crc = crc16CcittFalse((const uint8_t *)prefix, (size_t)n);
   GuardianSerial.print(prefix);
   GuardianSerial.print('|');
@@ -226,6 +243,28 @@ bool sendFrame(const __FlashStringHelper *type, const __FlashStringHelper *paylo
   GuardianSerial.print(crcText);
   GuardianSerial.print('\n');
   return true;
+}
+
+bool sendFrame(const __FlashStringHelper *type, const char *payload) {
+  if (txSequence == 0xFFFFFFFFUL) {
+    Serial.println(F("[FAULT] Outgoing sequence exhausted; guardian locked."));
+    guardianRevokeLatched = true;
+    guardianLink = LINK_REVOKED;
+    atmState = ATM_GUARDIAN_LOCKED;
+    return false;
+  }
+  return sendFrameAtSequence(type, payload, txSequence + 1UL);
+}
+
+bool sendFrame(const __FlashStringHelper *type, const __FlashStringHelper *payload) {
+  if (txSequence == 0xFFFFFFFFUL) {
+    Serial.println(F("[FAULT] Outgoing sequence exhausted; guardian locked."));
+    guardianRevokeLatched = true;
+    guardianLink = LINK_REVOKED;
+    atmState = ATM_GUARDIAN_LOCKED;
+    return false;
+  }
+  return sendFrameAtSequence(type, payload, txSequence + 1UL);
 }
 
 bool parseFrame(char *line, char fields[5][48], uint32_t &seqOut) {
@@ -253,7 +292,7 @@ bool parseFrame(char *line, char fields[5][48], uint32_t &seqOut) {
     part = strtok_r(NULL, "|", &save);
   }
   if (part || count != 5) return false;
-  if (!STREQ(fields[0], "S2") || !validSession(fields[2])) return false;
+  if (!STREQ(fields[0], "S3") || !validSession(fields[2])) return false;
   if (!fields[3][0]) return false;
   for (size_t i = 0; fields[3][i]; ++i)
     if (fields[3][i] < '0' || fields[3][i] > '9') return false;
@@ -493,35 +532,66 @@ void handleGuardianLine(char *line) {
     enterGuardianLock(F("Guardian session mismatch."));
     return;
   }
-  if (seq != lastGuardianSequence + 1) {
+  const char *type = fields[1];
+  const char *payload = fields[4];
+
+  // A repeated, identical guardian HELLO is a handshake retry, not a new message.
+  if (guardianHelloSeen && seq == 1 && STREQ(type, "HELLO") &&
+      strcmp(payload, "ESP32-SENTINEL-V3") == 0) {
+    if (!guardianRevokeLatched && !statePublished) {
+      Serial.println(F("[LINK_RETRY] Duplicate guardian HELLO; replaying ACK seq=2."));
+      sendFrameAtSequence(F("ACK"), F("HELLO_ACCEPTED"), 2);
+      return;
+    }
+    enterGuardianLock(F("Repeated guardian HELLO after startup negotiation."));
+    return;
+  }
+
+  // An exact duplicate handshake ACK is non-authorizing; do not advance liveness.
+  if (guardianHelloSeen && handshakeComplete && seq == 2 &&
+      STREQ(type, "ACK") && STREQ(payload, "HELLO_ACCEPTED")) {
+    Serial.println(F("[LINK_RETRY] Duplicate handshake ACK ignored."));
+    return;
+  }
+
+  if (seq != lastGuardianSequence + 1UL) {
     enterGuardianLock(F("Guardian sequence gap, duplicate or stale frame."));
     return;
   }
   lastGuardianSequence = seq;
   lastGuardianFrameAt = millis();
-  const char *type = fields[1];
-  const char *payload = fields[4];
 
   if (STREQ(type, "HELLO")) {
-    if (handshakeComplete) {
-      enterGuardianLock(F("Repeated guardian HELLO inside an established session."));
+    if (guardianHelloSeen || seq != 1 ||
+        strcmp(payload, "ESP32-SENTINEL-V3") != 0) {
+      enterGuardianLock(F("Unexpected guardian V3 HELLO."));
       return;
     }
-    if (!STRNEQ(payload, "ESP32-SENTINEL-V2", 17)) {
-      enterGuardianLock(F("Unexpected guardian protocol identity."));
-      return;
-    }
-    handshakeComplete = true;
-    if (!guardianRevokeLatched) guardianLink = LINK_UNKNOWN;
-    Serial.println(F("[LINK] V2 guardian handshake observed (identity is self-reported)."));
-    sendFrame(F("ACK"), F("HELLO_ACCEPTED"));
-    if (!statePublished) sendState();
-  } else if (STREQ(type, "ACK")) {
-    if (!handshakeComplete || !STREQ(payload, "HELLO_ACCEPTED")) {
+    guardianHelloSeen = true;
+    guardianLink = LINK_UNKNOWN;
+    Serial.println(F("[LINK] V3 guardian HELLO observed; waiting for final handshake ACK."));
+    sendFrameAtSequence(F("ACK"), F("HELLO_ACCEPTED"), 2);
+    return;
+  }
+
+  if (STREQ(type, "ACK")) {
+    if (!guardianHelloSeen || handshakeComplete ||
+        !STREQ(payload, "HELLO_ACCEPTED")) {
       enterGuardianLock(F("Unexpected guardian ACK."));
       return;
     }
-  } else if (STREQ(type, "STATUS")) {
+    handshakeComplete = true;
+    guardianLink = LINK_UNKNOWN;
+    Serial.println(F("[LINK] V3 handshake complete; waiting for fresh guardian status."));
+    return;
+  }
+
+  if (!handshakeComplete) {
+    enterGuardianLock(F("Guardian sent traffic before V3 handshake completion."));
+    return;
+  }
+
+  if (STREQ(type, "STATUS")) {
     if (guardianRevokeLatched) return;
     if (!STREQ(payload, "HEALTHY")) {
       enterGuardianLock(F("Malformed or non-healthy guardian status."));
@@ -969,15 +1039,15 @@ void setup() {
   budgetWindowStartedAt = millis();
   atmState = ATM_UNCOMMISSIONED;
   Serial.println();
-  Serial.println(F("SENTINEL ATM CONTROLLER V2 READY"));
+  Serial.println(F("SENTINEL ATM CONTROLLER V3 READY"));
   Serial.println(F("EDUCATIONAL DEMO: fictional accounts; no physical dispensing."));
   Serial.println(F("No default card or PIN exists. Runtime provisioning required."));
   Serial.print(F("BUILD (self-reported): "));
-  Serial.println(F("UNO-ATM-V2"));
+  Serial.println(F("UNO-ATM-V3"));
   Serial.print(F("SESSION: "));
   Serial.println(sessionId);
   printHelp();
-  sendFrame(F("HELLO"), F("UNO-ATM-V2"));
+  sendFrameAtSequence(F("HELLO"), F("UNO-ATM-V3"), 1);
   lastHelloAt = millis();
 }
 
@@ -986,8 +1056,14 @@ void loop() {
   pollGuardian();
   pollUsb();
 
-  if (!handshakeComplete && now - lastHelloAt >= HELLO_RETRY_MS) {
-    sendFrame(F("HELLO"), F("UNO-ATM-V2"));
+  if (!handshakeComplete && !guardianRevokeLatched &&
+      (uint32_t)(now - lastHelloAt) >= HELLO_RETRY_MS) {
+    ++helloRetryCount;
+    if ((helloRetryCount % 5UL) == 1UL) {
+      Serial.print(F("[LINK_RETRY] Re-sending identical UNO HELLO seq=1; retries="));
+      Serial.println(helloRetryCount);
+    }
+    sendFrameAtSequence(F("HELLO"), F("UNO-ATM-V3"), 1);
     lastHelloAt = now;
   }
 
