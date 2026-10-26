@@ -34,7 +34,7 @@ declare global {
       exportEvidence: (request: { format: 'json' | 'csv'; fileName?: string; content: string }) => Promise<{ ok: boolean; canceled?: boolean; filePath?: string; error?: string }>;
       getUserDataPath: () => Promise<string>;
       listSerialPorts: () => Promise<{ ports: Array<{ path: string; manufacturer?: string; serialNumber?: string; vendorId?: string; productId?: string }> }>;
-      getSerialReadiness: () => Promise<{ pairReady: boolean; freshnessMs: number; researchMode: 'SIMULATION' | 'HIL'; boards: Record<SentinelDevice, SentinelReadinessBoard>; hilFaultLatched: boolean; faultResetBaseline: { uno: number; sentinel: number } | null; boardBootEpochs: { uno: number; sentinel: number }; canClearHilFault: boolean }>;
+      getSerialReadiness: () => Promise<{ pairReady: boolean; freshnessMs: number; researchMode: 'SIMULATION' | 'HIL'; boards: Record<SentinelDevice, SentinelReadinessBoard>; hilFaultLatched: boolean; faultResetBaseline: { uno: number; sentinel: number } | null; boardBootEpochs: { uno: number; sentinel: number }; canClearHilFault: boolean; hilShadowTouched: boolean }>;
       setResearchMode: (mode: 'SIMULATION' | 'HIL') => Promise<{ ok: boolean; mode?: 'SIMULATION' | 'HIL'; error?: string }>;
       clearHilFault: () => Promise<{ ok: boolean; error?: string }>
       connectBoard: (request: { device: SentinelDevice; path: string; baudRate: number }) => Promise<{ ok: boolean; error?: string; sessionId?: string; phase?: SentinelBoardPhase }>;
