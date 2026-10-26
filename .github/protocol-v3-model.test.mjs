@@ -124,6 +124,33 @@ class LineReceiver {
   }
 }
 
+class SequenceGate {
+  constructor(session, expectedSeq = 1) {
+    this.session = session;
+    this.lastSeq = expectedSeq - 1;
+    this.lastFingerprint = null;
+    this.fault = false;
+  }
+  accept(frame) {
+    if (this.fault) return { ok: false, reason: "FAULT_LATCHED" };
+    if (frame.session !== this.session) return this.fail("SESSION_MISMATCH");
+    const fingerprint = JSON.stringify(frame);
+    if (frame.seq === this.lastSeq && this.lastSeq !== 0) {
+      if (fingerprint === this.lastFingerprint) return { ok: true, duplicate: true, effectApplied: false };
+      return this.fail("CONFLICTING_DUPLICATE");
+    }
+    if (this.lastSeq === MAX_SEQUENCE) return this.fail("SEQUENCE_EXHAUSTED");
+    if (frame.seq !== this.lastSeq + 1) return this.fail("SEQUENCE_GAP_OR_REPLAY");
+    this.lastSeq = frame.seq;
+    this.lastFingerprint = fingerprint;
+    return { ok: true, duplicate: false, effectApplied: true };
+  }
+  fail(reason) {
+    this.fault = true;
+    return { ok: false, reason, effectApplied: false };
+  }
+}
+
 class StatusGate {
   constructor({ heartbeatSeq, expectedStatusSeq, nowMs = 0 }) {
     this.heartbeatSeq = heartbeatSeq;
@@ -254,8 +281,8 @@ test("frame parser rejects missing newline, corrupted CRC, extra delimiters and 
   assert.equal(decodeFrame(corruptFrame(wire)).error, "CRC_MISMATCH");
   const extraField = wire.replace("|HEARTBEAT|", "|HEARTBEAT|EXTRA|");
   assert.equal(decodeFrame(extraField).error, "FIELD_COUNT");
-  const tooLong = encodeFrame({ type: "EVENT", session: "U0000003C", seq: 14, payload: "x".repeat(70) });
-  assert.equal(decodeFrame(tooLong).ok, false);
+  assert.throws(() => encodeFrame({ type: "EVENT", session: "U0000003C", seq: 14, payload: "x".repeat(100) }),
+    /Frame exceeds maximum length/);
 });
 
 test("payload schema rejects missing, duplicate, unknown, empty and malformed fields", () => {
@@ -268,13 +295,14 @@ test("payload schema rejects missing, duplicate, unknown, empty and malformed fi
 });
 
 test("line receiver handles chunked and concatenated lines and drops an overlong line", () => {
-  const receiver = new LineReceiver(30);
-  assert.deepEqual(receiver.push("S3|STAT"), []);
-  assert.deepEqual(receiver.push("US|U0000003C|3|HEALTHY;ack_seq=12|1234\n"),
-    ["S3|STATUS|U0000003C|3|HEALTHY;ack_seq=12|1234\n"]);
+  const receiver = new LineReceiver(MAX_FRAME_CHARS);
+  const wire = encodeFrame({ type: "STATUS", session: "U0000003C", seq: 3, payload: "HEALTHY;ack_seq=12" });
+  assert.deepEqual(receiver.push(wire.slice(0, 7)), []);
+  assert.deepEqual(receiver.push(wire.slice(7)), [wire]);
   const two = receiver.push("one\ntwo\n");
   assert.deepEqual(two, ["one\n", "two\n"]);
-  assert.deepEqual(receiver.push("z".repeat(40) + "\nvalid\n"), ["valid\n"]);
+  const bounded = new LineReceiver(30);
+  assert.deepEqual(bounded.push("z".repeat(40) + "\nvalid\n"), ["valid\n"]);
 });
 
 test("STATUS accepts only exact matching heartbeat ack and never grants a permit", () => {
@@ -314,15 +342,39 @@ test("drop, corrupt, truncate and delay faults never become accepted status", ()
   assert.equal(delayed.chunks.length, 1);
 });
 
-test("duplicate and reordered frames are surfaced to sequence validation rather than silently skipped", () => {
-  const first = encodeFrame({ type: "STATE", session: "U0000003C", seq: 3, payload: "atm=IDLE;auth=0;tx=0" });
-  const next = encodeFrame({ type: "HEARTBEAT", session: "U0000003C", seq: 4, payload: "state=IDLE;up=1" });
-  const duplicate = injectFault(first, "DUPLICATE");
-  assert.equal(decodeFrame(duplicate.chunks[0]).ok, true);
-  assert.equal(decodeFrame(duplicate.chunks[1]).ok, true);
-  const reordered = injectFault(first, "REORDER", { frames: [first, next] });
-  assert.equal(decodeFrame(reordered.chunks[0]).frame.seq, 4);
-  assert.equal(decodeFrame(reordered.chunks[1]).frame.seq, 3);
+test("identical duplicates are idempotent; conflicting duplicates, gaps and session changes fail closed", () => {
+  const first = { version: "S3", type: "STATE", session: "U0000003C", seq: 3, payload: "atm=IDLE;auth=0;tx=0" };
+  const sequence = new SequenceGate("U0000003C", 3);
+  assert.equal(sequence.accept(first).effectApplied, true);
+  assert.deepEqual(sequence.accept({ ...first }), { ok: true, duplicate: true, effectApplied: false });
+
+  const conflicting = new SequenceGate("U0000003C", 3);
+  conflicting.accept(first);
+  assert.equal(conflicting.accept({ ...first, payload: "atm=AUTHENTICATED;auth=1;tx=0" }).reason, "CONFLICTING_DUPLICATE");
+
+  const gap = new SequenceGate("U0000003C", 3);
+  assert.equal(gap.accept({ ...first, seq: 4 }).reason, "SEQUENCE_GAP_OR_REPLAY");
+
+  const session = new SequenceGate("U0000003C", 3);
+  assert.equal(session.accept({ ...first, session: "U0000004D" }).reason, "SESSION_MISMATCH");
+
+  const exhausted = new SequenceGate("U0000003C", MAX_SEQUENCE);
+  assert.equal(exhausted.accept({ ...first, seq: MAX_SEQUENCE }).effectApplied, true);
+  assert.equal(exhausted.accept({ ...first, seq: 1 }).reason, "SEQUENCE_EXHAUSTED");
+});
+
+test("concat, reorder, and bounded retries preserve message identities", () => {
+  const a = encodeFrame({ type: "STATE", session: "U0000003C", seq: 3, payload: "atm=IDLE;auth=0;tx=0" });
+  const b = encodeFrame({ type: "HEARTBEAT", session: "U0000003C", seq: 4, payload: "state=IDLE;up=1" });
+  const receiver = new LineReceiver();
+  assert.deepEqual(receiver.push(injectFault(a, "CONCATENATE", { otherFrame: b }).chunks[0]), [b, a]);
+  const reordered = injectFault(a, "REORDER", { frames: [a, b] }).chunks;
+  assert.equal(decodeFrame(reordered[0]).frame.seq, 4);
+  assert.equal(decodeFrame(reordered[1]).frame.seq, 3);
+
+  const retry = [a, a, a];
+  assert.equal(new Set(retry).size, 1, "retry must reuse identical frame/sequence");
+  assert.equal(retry.length, 3, "retry count must be bounded");
 });
 
 test("transaction model keeps cash unchanged until exact permit then commits exactly once", () => {
