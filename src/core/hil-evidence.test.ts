@@ -218,3 +218,48 @@ describe('paired-reset fault clearing', () => {
     expect(canClearHilFaultAfterPairedReset('RECONCILED', true, baseline, { uno: 4, sentinel: 7 })).toBe(false);
   });
 });
+
+
+describe('post-commit shadow integrity', () => {
+  const committed = () => {
+    const shadow = reduceHilShadowObservation(
+      reduceHilShadowObservation(initialHilShadowState(),
+        'ATM_EVENT|ACCOUNT_PROVISIONED|card=CARD01;balance=50000'),
+      'ATM_EVENT|CASH_CONFIGURED|currency=INR;notes500=20;notes200=20;notes100=20;notes50=20;total=17000'
+    );
+    return reconcileHilShadowCommit(shadow, {
+      id: 'T0000007', amount: 500, phase: 'RECONCILED', permitSeen: true,
+      unoCommitSeen: true, guardianCommitSeen: true, balance: 49500, message: 'matched'
+    });
+  };
+
+  it('quarantines a changed cassette after commit without overwriting the reduced inventory', () => {
+    const afterCommit = committed();
+    const changed = reduceHilShadowObservation(afterCommit,
+      'ATM_EVENT|CASH_CONFIGURED|currency=INR;notes500=20;notes200=20;notes100=20;notes50=20;total=17000');
+    expect(changed.status).toBe('RECONCILIATION REQUIRED');
+    expect(changed.accountBalance).toBe(afterCommit.accountBalance);
+    expect(changed.cassetteCash).toBe(afterCommit.cassetteCash);
+    expect(changed.dispensedTotal).toBe(afterCommit.dispensedTotal);
+  });
+
+  it('quarantines account balance reprovisioning after commit', () => {
+    const afterCommit = committed();
+    const changed = reduceHilShadowObservation(afterCommit,
+      'ATM_EVENT|ACCOUNT_PROVISIONED|card=CARD01;balance=50000');
+    expect(changed.status).toBe('RECONCILIATION REQUIRED');
+    expect(changed.accountBalance).toBe(49500);
+    expect(changed.cassetteCash).toBe(16500);
+    expect(changed.dispensedTotal).toBe(500);
+  });
+
+  it('rejects duplicate and malformed key-value fields instead of silently taking the last value', () => {
+    expect(parseKeyValueText('id=T0000007;amount=500;amount=1')).toEqual({});
+    expect(parseKeyValueText('id=T0000007;amount=500;unexpected field')).toEqual({});
+  });
+
+  it('redacts PIN values in structured key-value diagnostics', () => {
+    expect(redactSensitiveSerialText('ATM_EVENT|PIN_STATE|pin=4826;tries=1')).toContain('pin=[REDACTED]');
+    expect(redactSensitiveSerialText('ATM_EVENT|PIN_STATE|pin=4826;tries=1')).not.toContain('4826');
+  });
+});
