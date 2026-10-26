@@ -23,6 +23,7 @@ export type BoardRole = 'uno' | 'sentinel';
 
 export interface StructuredBoardEvent {
   type: string;
+  phase?: string;
   eventName?: string;
   id?: string;
   amount?: number;
