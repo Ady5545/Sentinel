@@ -184,7 +184,7 @@ test('oversized and malformed input invalidate readiness and release the port', 
   assert.equal(h.emitted.some(event => event.code === 'LINE_TOO_LONG'), true);
   assert.equal(h.manager.getReadinessSnapshot().boards.uno.connected, false);
   await h.manager.connect('uno', '/dev/ttyUNO', 115200);
-  h.created.get('/dev/ttyUNO').feed(' [STATUS_RX] Accepted HEALTHY\n');
+  h.created.get('/dev/ttyUNO').feed('\tSTATUS\n');
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(h.emitted.some(event => event.code === 'MALFORMED_LINE'), true);
   assert.equal(h.manager.getReadinessSnapshot().boards.uno.connected, false);
