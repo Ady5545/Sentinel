@@ -49,6 +49,8 @@ test("ESP32 gates transaction requests on completed negotiation", () => {
   assert.match(requestHandler, /if \(!handshakeConfirmed\)/);
   assert.match(requestHandler, /Transaction request before V3 handshake completion/);
   assert.match(esp, /HANDSHAKE_TIMEOUT_MS = 8000UL/);
+  assert.match(uno, /HANDSHAKE_TIMEOUT_MS = 8000UL/);
+  assert.match(uno, /V3 handshake timeout; clean paired restart required/);
 });
 
 test("protocol documentation requires a matched pair and idempotent retries", () => {
