@@ -74,3 +74,21 @@ test("Uno serializes heartbeat/status traffic for SoftwareSerial", () => {
   assert.match(protocol, /at most one.{0,80}HEARTBEAT/i);
   assert.match(protocol, /clears the outstanding-heartbeat flag only after receiving and validating that STATUS/i);
 });
+
+test("ESP32 safely drops malformed pre-session UART noise and keeps revocation latched", () => {
+  const handlerStart = esp.indexOf("void handleUnoLine(char *line)");
+  const handlerEnd = esp.indexOf("void pollUno()", handlerStart);
+  assert.ok(handlerStart >= 0 && handlerEnd > handlerStart, "ESP32 UNO frame handler must exist");
+  const handler = esp.slice(handlerStart, handlerEnd);
+  assert.match(handler, /if\s*\(revokeLatched\)\s*return;/,
+    "a latched revoke must prevent later frames from changing guardian state");
+  const parseStart = handler.indexOf("if (!parseFrame(line, fields, seq))");
+  const typeStart = handler.indexOf("const char *type", parseStart);
+  assert.ok(parseStart >= 0 && typeStart > parseStart);
+  const malformedBranch = handler.slice(parseStart, typeStart);
+  assert.match(malformedBranch, /if\s*\(!sessionEstablished\)/,
+    "malformed startup noise must be distinguished from malformed session traffic");
+  assert.match(malformedBranch, /LINK_DROP.*pre-session UART noise/);
+  assert.match(malformedBranch, /revoke\("Malformed frame, overlong input, CRC or protocol-version failure\."\)/,
+    "malformed frames after session establishment must still fail closed");
+});
