@@ -18,9 +18,9 @@ test("both endpoints use S3 framing and V3 identities", () => {
 });
 
 test("retries preserve startup message identities instead of incrementing sequence counters", () => {
-  const unoHello = /sendFrameAt\s*\(\s*F\("HELLO"\)\s*,\s*"UNO-ATM-V3"\s*,\s*1\s*\)/g;
+  const unoHello = /sendFrameAt\s*\(\s*F\("HELLO"\)\s*,\s*F\("UNO-ATM-V3"\)\s*,\s*1\s*\)/g;
   assert.ok((uno.match(unoHello) ?? []).length >= 2, "Uno must retry the same HELLO at sequence 1");
-  assert.match(uno, /sendFrameAt\s*\(\s*F\("ACK"\)\s*,\s*"HELLO_ACCEPTED"\s*,\s*2\s*\)/);
+  assert.match(uno, /sendFrameAt\s*\(\s*F\("ACK"\)\s*,\s*F\("HELLO_ACCEPTED"\)\s*,\s*2\s*\)/);
   const espHello = /sendFrameAtSequence\s*\(\s*"HELLO"\s*,\s*"ESP32-SENTINEL-V3"\s*,\s*1\s*\)/g;
   assert.ok((esp.match(espHello) ?? []).length >= 2, "ESP32 must retry the same HELLO at sequence 1");
   assert.match(esp, /sendFrameAtSequence\s*\(\s*"ACK"\s*,\s*"HELLO_ACCEPTED"\s*,\s*2\s*\)/);
@@ -36,12 +36,16 @@ test("exact handshake duplicates are handled before strict sequence progression"
 });
 
 test("Uno is not ready after the first guardian HELLO; final ACK completes the handshake", () => {
-  const helloBranch = uno.search(/if\s*\(\s*STREQ\(type,\s*"HELLO"\)\s*\)/);
-  const ackBranch = uno.search(/else\s+if\s*\(\s*STREQ\(type,\s*"ACK"\)\s*\)/);
-  const readySet = uno.indexOf("handshakeComplete=true;", helloBranch);
+  const handlerStart = uno.indexOf("void handleGuardianLine(char *line)");
+  const handlerEnd = uno.indexOf("void pollGuardian()", handlerStart);
+  assert.ok(handlerStart >= 0 && handlerEnd > handlerStart);
+  const handler = uno.slice(handlerStart, handlerEnd);
+  const helloBranch = handler.search(/if\s*\(\s*STREQ\(type,\s*"HELLO"\)\s*\)/);
+  const ackBranch = handler.search(/if\s*\(\s*STREQ\(type,\s*"ACK"\)\s*\)/);
+  const readySet = handler.search(/handshakeComplete\s*=\s*true\s*;/);
   assert.ok(helloBranch >= 0 && ackBranch > helloBranch && readySet > ackBranch);
-  assert.match(uno.slice(helloBranch, ackBranch), /sendFrameAt\s*\(\s*F\("ACK"\)\s*,\s*"HELLO_ACCEPTED"\s*,\s*2\s*\)/);
-  assert.doesNotMatch(uno.slice(helloBranch, ackBranch), /handshakeComplete\s*=\s*true/);
+  assert.match(handler.slice(helloBranch, ackBranch), /sendFrameAt\s*\(\s*F\("ACK"\)\s*,\s*F\("HELLO_ACCEPTED"\)\s*,\s*2\s*\)/);
+  assert.doesNotMatch(handler.slice(helloBranch, ackBranch), /handshakeComplete\s*=\s*true/);
 });
 
 test("ESP32 gates transaction requests on completed negotiation", () => {
@@ -67,7 +71,7 @@ test("Uno serializes heartbeat/status traffic for SoftwareSerial", () => {
   assert.match(uno, /bool\s+awaitingGuardianStatus\s*=\s*false\s*;/);
   assert.match(uno, /awaitingGuardianStatus\s*=\s*true\s*;/);
   assert.match(uno, /!awaitingGuardianStatus[\s\S]*sendHeartbeat\(now\)/);
-  const statusBranch = uno.search(/else\s+if\s*\(\s*STREQ\(type,\s*"STATUS"\)\s*\)/);
+  const statusBranch = uno.search(/if\s*\(\s*STREQ\(type,\s*"STATUS"\)\s*\)/);
   assert.ok(statusBranch >= 0, "Uno must have a STATUS receive branch");
   assert.match(uno.slice(statusBranch, statusBranch + 420), /awaitingGuardianStatus\s*=\s*false\s*;/);
   assert.match(esp, /if\s*\(!revokeLatched\)\s*sendFrame\("STATUS",\s*"HEALTHY"\);/);
