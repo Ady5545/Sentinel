@@ -13,7 +13,7 @@ import {
   reduceStructuredHilTransaction, type HilBoardResetEpochs, type HilTransaction
 } from './core/hil-evidence';
 import {
-  createResearchRun, reduceResearchRun, replaySyntheticScenario, researchRunToCsv, researchRunToJson,
+  createResearchRun, reduceResearchRun, replaySyntheticScenario, researchRunToJson,
   SYNTHETIC_SCENARIOS, type ResearchRunRecord, type SyntheticScenario
 } from './core/research-session';
 
@@ -523,6 +523,42 @@ function ExperimentView({ state, dispatch }: { state: AtmState; dispatch: Dispat
     <div className="results-grid"><section className="result-panel"><div className="result-head"><span>VIRTUAL DISPENSER RESULT</span><b className={blocked || baselineReleased ? 'red-text' : 'green-text'}>{blocked ? 'BLOCKED' : baselineReleased ? 'UNAUTHORIZED DISPENSE' : 'READY'}</b></div><strong className="result-number">{money(state.dispensedTotal)}</strong><small>Virtual cash released in this run</small><div className="result-foot"><span>Cassette cash remaining</span><b>{money(state.cassetteCash)}</b></div></section><section className="result-panel"><div className="result-head"><span>SENTINEL DECISION</span><b>{state.lastDecision}</b></div><strong className="result-number">{state.findings.length}</strong><small>Findings in active run</small><div className="result-foot"><span>Controller state</span><b className={state.controllerState === 'COMPROMISED' ? 'red-text' : ''}>{state.controllerState}</b></div></section></div>
     <div className="scientific-note"><CircleAlert size={16} /><p>This fixture validates only the configured model. It cannot prove detection of arbitrary real firmware compromise, and the virtual gate is not a physical cash-dispenser interlock.</p></div>
     {state.findings.length > 0 && <section className="finding-panel"><h3>Policy findings</h3>{state.findings.map((finding,index)=><p key={finding}><span>{String(index+1).padStart(2,'0')}</span>{finding}</p>)}</section>}
+  </>;
+}
+
+function ResearchRunPanel({ run, scenarioRuns, onReplay }: {
+  run: ResearchRunRecord;
+  scenarioRuns: ResearchRunRecord[];
+  onReplay: (scenario: SyntheticScenario) => void;
+}) {
+  return <>
+    <section className="data-panel">
+      <PanelTitle icon={<Activity size={16} />} title="RESEARCH SESSION COORDINATOR" suffix={`SCHEMA V${run.schemaVersion}`} />
+      <div className="authority-row"><span>Active run</span><b>{run.runId}</b></div>
+      <div className="authority-row"><span>Execution mode</span><b>{run.mode}</b></div>
+      <div className="authority-row"><span>Coordinator state</span><b className={run.phase === 'FROZEN' ? 'red-text' : 'green-text'}>{run.phase}</b></div>
+      <div className="authority-row"><span>Exactly-once shadow commits</span><b>{run.shadowUpdateCount}</b></div>
+      <p className="muted-note">The same run ledger receives ATM simulation events, parsed board evidence, HIL transaction correlation, experiment replay results and journal/export records. Board-reported evidence is not cryptographic attestation.</p>
+      {run.freezeReason && <div className="hardware-notice"><CircleAlert size={16} /><p>HIL frozen: {run.freezeReason}</p></div>}
+    </section>
+    <section className="data-panel">
+      <PanelTitle icon={<Fingerprint size={16} />} title="VERSIONED SOFTWARE-ONLY REPLAY" suffix="NO HARDWARE COMMANDS" />
+      <p className="muted-note">These deterministic fixtures run in an isolated software-only record. They never invoke the serial bridge, and their board-like events are labelled SYNTHETIC_FIXTURE.</p>
+      <div className="service-list">
+        {SYNTHETIC_SCENARIOS.map(scenario => {
+          const latest = scenarioRuns.find(item => item.runId.startsWith('fixture-' + scenario.scenarioId + '-'));
+          return <div className="service-button" key={scenario.scenarioId}>
+            <span className="service-icon"><Fingerprint size={17} /></span>
+            <span><strong>{scenario.title} · v{scenario.version}</strong><small>{scenario.description}</small>{latest && <small>Latest: {latest.phase} · shadow updates {latest.shadowUpdateCount}</small>}</span>
+            <button className="board-button" onClick={() => onReplay(scenario)}>Replay</button>
+          </div>;
+        })}
+      </div>
+      <div className="authority-row"><span>Saved synthetic runs</span><b>{scenarioRuns.length}</b></div>
+      {scenarioRuns.length > 0 && <div className="serial-log">{scenarioRuns.slice(-5).reverse().map(item =>
+        <p key={item.runId}><strong>{item.runId}</strong> · {item.phase} · {item.shadowUpdateCount} shadow update(s) · {item.events.length} events · SOFTWARE_ONLY</p>
+      )}</div>}
+    </section>
   </>;
 }
 
