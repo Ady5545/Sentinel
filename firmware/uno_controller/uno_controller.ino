@@ -880,7 +880,7 @@ void printHelp() {
   Serial.println(F("  SET_CASH <COUNT_500> <COUNT_200> <COUNT_100> <COUNT_50>"));
   Serial.println(F("  SET_POLICY <MAX_TXN> <WINDOW_LIMIT> [WINDOW_MS PIN_TRIES LOCKOUT_MS PIN_TIMEOUT_MS SESSION_TIMEOUT_MS GUARDIAN_TIMEOUT_MS TX_TIMEOUT_MS]"));
   Serial.println(F("  CARD <CARD_ID> | PIN <PIN> | BALANCE | WITHDRAW <AMOUNT> | CHANGE_PIN <CURRENT> <NEW> <CONFIRM>"));
-  Serial.println(F("  CANCEL | LOGOUT | STATUS | JOURNAL | HELP | FIXTURE_MISMATCH"));
+  Serial.println(F("  CANCEL | LOGOUT | STATUS | JOURNAL | HELP | FIXTURE_MISMATCH / DEMO_ATTACK"));
   Serial.println(F("Accounts/PINs/cash are RAM-only and are erased on reset."));
 }
 
@@ -1241,9 +1241,12 @@ void handleCommand(char *line) {
     } else {
       emitEvent(F("LOGOUT_IGNORED"), F("reason=no_authenticated_session"));
     }
-  } else if (STREQ(argv[0], "FIXTURE_MISMATCH") && argc == 1) {
-    sendFrame(F("EVENT"), F("source=SIMULATED;event=PROFILE_MISMATCH"));
-    emitEvent(F("FIXTURE_SENT"), F("source=SIMULATED"));
+  } else if ((STREQ(argv[0], "FIXTURE_MISMATCH") || STREQ(argv[0], "DEMO_ATTACK")) && argc == 1) {
+    Serial.println(F("[DEMO] Controlled software integrity-violation fixture triggered."));
+    Serial.println(F("[DEMO] This local fixture does not assert UART delivery or peer detection."));
+    emitEvent(F("SIMULATED_INTEGRITY_FIXTURE"), F("source=LOCAL_SOFTWARE;event=PROFILE_MISMATCH"));
+    enterGuardianLock(F("SIMULATED integrity-violation fixture triggered by operator."));
+    Serial.println(F("[DEMO] Virtual dispensing is now DENIED by the ATM controller."));
   } else {
     emitEvent(F("COMMAND_REJECTED"), F("reason=unknown_command_or_arguments"));
     Serial.println(F("Send HELP for command syntax."));
