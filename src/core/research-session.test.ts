@@ -81,6 +81,9 @@ describe('Quarter 3 research session coordinator', () => {
     expect(run.events[0].detail).toBe('PIN [REDACTED]; demoPin=[REDACTED]');
     expect(Object.isFrozen(run.events[0])).toBe(true);
     expect(run.events[0].seq).toBe(1);
+    expect(Object.isFrozen(run)).toBe(true);
+    expect(Object.isFrozen(run.events)).toBe(true);
+    expect(Object.isFrozen(run.boardSessions)).toBe(true);
   });
 
   it('replays versioned scenarios offline with honest synthetic provenance', () => {
