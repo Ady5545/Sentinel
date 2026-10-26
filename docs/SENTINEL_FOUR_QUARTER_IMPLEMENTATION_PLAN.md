@@ -16,8 +16,9 @@
 - [x] Audit the existing TX_COMMITTED/ACK implementation: the Uno already retains and retries the same commit event sequence, while the ESP32 stores and replays the matching ACK for an exact duplicate event. Do not rewrite these existing paths without evidence.
 - [x] Add deterministic model coverage for a lost commit event, a lost ACK, idempotent duplicate commit reports, and retry exhaustion; assert the controller mutation count remains one.
 - [ ] Finish the critical-message contract audit for REQUEST, PERMIT, DENY, TX_COMMITTED and ACK, including same-sequence retries, idempotent duplicate handling, and fail-closed timeout outcomes.
-- [ ] Compare the model against both actual firmware implementations and add source/contract checks for every retry/ACK edge; model tests alone do not prove embedded behavior.
-- [ ] Re-run desktop/domain tests, Uno build, ESP32 build and protocol contract tests on this quarter's exact commit.
+- [x] Add source-contract assertions that the Uno uses bounded retries of the original TX_COMMITTED sequence and the ESP32 replays the original ACK without recounting a duplicate commit.
+- [ ] Compare the model against both actual firmware implementations and complete the remaining source/contract edge audit; model tests alone do not prove embedded behavior.
+- [ ] Re-run desktop/domain tests, Uno build, ESP32 build and protocol contract tests on this quarter's exact commit. A stale Vitest discovery issue was found: repository `.agent/**.test.cjs` files use Node's test runner, so the desktop Vitest script is now scoped to `src` while Electron's Node tests remain in `check:main`.
 
 **Quarter 1 exit gate:** Automated tests prove the virtual gate requires a current explicit transaction-specific permit and protocol retries never repeat a money mutation. Hardware liveness is reported separately and remains **NOT VERIFIED** until paired-board logs prove it.
 
@@ -59,6 +60,8 @@
 | Permit time-window validation tightened | Implemented on this branch; CI pending | `src/core/atm-engine.ts` |
 | Three permit-boundary regressions added | Implemented on this branch; CI pending | `src/core/atm-engine.test.ts` |
 | Commit delivery fault-model cases added | Implemented on this branch; CI pending | `.github/protocol-v3-model.node.mjs` — lost event, lost ACK, exact retry identity and retry exhaustion |
+| Firmware commit retry/ACK source contract | Added on this branch; CI pending | `.github/protocol-v3-handshake-contract.mjs` — bounded retries, identical sequence and idempotent ACK replay |
+| Vitest discovery issue | Fixed on this branch; CI pending | `package.json` now scopes Vitest to `src`, avoiding Node-test files under `.agent` being treated as Vitest suites |
 | Quarter 1 overall | **IN PROGRESS** | Remaining protocol delivery, fault-model and full test gates above |
 | Physical UART qualification | **NOT VERIFIED** | Requires actual Uno + ESP32 paired logs; code changes cannot establish it |
 
