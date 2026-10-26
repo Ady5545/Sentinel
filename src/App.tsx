@@ -506,14 +506,18 @@ function JournalRow({ event }: { event: JournalEvent }) {
   return <article className={'journal-row severity-' + event.severity}><div className="journal-icon">{icon}</div><time>{event.at}</time><div className="journal-copy"><strong>{event.title}</strong><p>{event.detail}</p><small>{event.source} · {event.id}</small></div><span className="severity-tag">{event.severity.toUpperCase()}</span></article>;
 }
 
-function HILOperatorControls({ pairReady, unoConnected, sendCommand, hilTransaction }: {
+function HILOperatorControls({ pairReady, researchMode, hilShadow, hilFaultLatched, sendCommand, hilTransaction }: {
   pairReady: boolean;
-  unoConnected: boolean;
-  sendCommand: (device: DeviceKey, command: string) => Promise<{ ok: boolean; error?: string; commandName?: string; sensitive?: boolean }>;
+  researchMode: ResearchMode;
+  hilShadow: HilShadowState;
+  hilFaultLatched: boolean;
+  sendCommand: (device: DeviceKey, command: BoardCommand) => Promise<{ ok: boolean; error?: string; commandName?: string; sensitive?: boolean }>;
   hilTransaction: HilTransaction | null;
 }) {
-  const customerOpsAllowed = pairReady && canBeginHilWithdrawal(hilTransaction);
-  const canConfigure = unoConnected && canBeginHilWithdrawal(hilTransaction);
+  const adapter = createUnoHilAdapter(command => sendCommand('uno', command));
+  const canConfigure = researchMode === 'HIL' && pairReady && !hilFaultLatched &&
+    hilShadow.status !== 'RECONCILIATION REQUIRED' && canBeginHilWithdrawal(hilTransaction);
+  const customerOpsAllowed = canConfigure && hilShadow.status === 'COMMISSIONED';
   const [cardId, setCardId] = useState('CARD01');
   const [demoPin, setDemoPin] = useState('');
   const [startingBalance, setStartingBalance] = useState('50000');
@@ -525,11 +529,14 @@ function HILOperatorControls({ pairReady, unoConnected, sendCommand, hilTransact
   const [customerPin, setCustomerPin] = useState('');
   const [feedback, setFeedback] = useState('');
   const [busy, setBusy] = useState(false);
-  const send = async (device: DeviceKey, command: string) => {
+
+  const send = async (commandName: string, action: () => Promise<{ ok: boolean; error?: string; commandName?: string; sensitive?: boolean }>) => {
     setBusy(true);
     try {
-      const result = await sendCommand(device, command);
-      setFeedback(result.ok ? (result.commandName || 'Command') + ' written; verify the board-reported response below.' : result.error || 'Command failed.');
+      const result = await action();
+      setFeedback(result.ok
+        ? (result.commandName || commandName) + ' was written; wait for the board-reported event before assuming acceptance.'
+        : result.error || (commandName + ' was denied.'));
       return result.ok;
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : String(error));
@@ -538,45 +545,55 @@ function HILOperatorControls({ pairReady, unoConnected, sendCommand, hilTransact
       setBusy(false);
     }
   };
+
   const provision = async () => {
+    const balance = Number(startingBalance);
     if (!/^[A-Z0-9_-]{1,16}$/.test(cardId) || !/^[0-9]{4,6}$/.test(demoPin) ||
-        !/^(0|[1-9][0-9]*)$/.test(startingBalance) || Number(startingBalance) > 1000000) {
+        !/^(0|[1-9][0-9]*)$/.test(startingBalance) || !Number.isSafeInteger(balance) || balance > 1000000) {
       setFeedback('Use an uppercase card ID, a fictional 4–6 digit PIN and a balance from 0 to 1,000,000.');
       setDemoPin('');
       return;
     }
     const pin = demoPin;
     setDemoPin('');
-    const ok = await send('uno', 'ADD_ACCOUNT ' + cardId + ' ' + pin + ' ' + startingBalance);
-    if (ok) setFeedback('Account provisioning command written. Confirm ATM_EVENT|ACCOUNT_PROVISIONED before proceeding.');
+    await send('ADD_ACCOUNT', () => adapter.provisionAccount(cardId, pin, balance));
   };
+
   const configureCash = async () => {
     const values = [cash500, cash200, cash100, cash50];
     if (values.some(value => !/^(0|[1-9][0-9]*)$/.test(value) || Number(value) > 9999)) {
       setFeedback('Each fictional note count must be an integer from 0 to 9999.');
       return;
     }
-    await send('uno', 'SET_CASH ' + values.join(' '));
+    await send('SET_CASH', () => adapter.configureCassette({
+      notes500: Number(cash500), notes200: Number(cash200),
+      notes100: Number(cash100), notes50: Number(cash50)
+    }));
   };
+
   const useCard = async () => {
-    if (!customerOpsAllowed) { setFeedback('Blocked: the pair is not fresh/ready or a previous HIL withdrawal is still unresolved.'); return; }
-    await send('uno', 'CARD ' + cardId);
+    if (!customerOpsAllowed) { setFeedback('Blocked: select HIL mode, establish fresh paired readiness, commission the shadow, and resolve any previous transaction.'); return; }
+    await send('CARD', () => adapter.insertCard(cardId));
   };
+
   const submitPin = async () => {
     if (!/^[0-9]{4,6}$/.test(customerPin)) { setFeedback('Enter the fictional demo PIN used when provisioning.'); setCustomerPin(''); return; }
     const pin = customerPin;
     setCustomerPin('');
-    if (!customerOpsAllowed) { setFeedback('Blocked: the pair is not fresh/ready or a previous HIL withdrawal is still unresolved.'); return; }
-    await send('uno', 'PIN ' + pin);
+    if (!customerOpsAllowed) { setFeedback('Blocked: the HIL shadow is not commissioned or HIL authority is faulted.'); return; }
+    await send('PIN', () => adapter.verifyPin(pin));
   };
+
   const withdraw = async () => {
-    if (!/^[1-9][0-9]*$/.test(withdrawAmount) || Number(withdrawAmount) > 1000000 || Number(withdrawAmount) % 50 !== 0) {
+    if (!/^[1-9][0-9]*$/.test(withdrawAmount) || !Number.isSafeInteger(Number(withdrawAmount)) ||
+        Number(withdrawAmount) > 1000000 || Number(withdrawAmount) % 50 !== 0) {
       setFeedback('Withdrawal must be a positive amount, no more than 1,000,000, and a multiple of ₹50.');
       return;
     }
-    if (!customerOpsAllowed) { setFeedback('Blocked: the pair is not fresh/ready or a previous HIL withdrawal is still unresolved.'); return; }
-    await send('uno', 'WITHDRAW ' + withdrawAmount);
+    if (!customerOpsAllowed) { setFeedback('Blocked: the HIL shadow is not commissioned, the pair is not ready, or a prior transaction/fault is unresolved.'); return; }
+    await send('WITHDRAW', () => adapter.withdraw(Number(withdrawAmount)));
   };
+
   return <>
     <div className="hil-setup-grid">
       <div><label className="field-label" htmlFor="hil-card">DEMO CARD ID</label><input id="hil-card" value={cardId} onChange={event => setCardId(event.target.value.toUpperCase())} maxLength={16} autoComplete="off" disabled={busy} /></div>
@@ -593,18 +610,22 @@ function HILOperatorControls({ pairReady, unoConnected, sendCommand, hilTransact
     <div className="hil-action-row"><button className="board-button" onClick={() => void configureCash()} disabled={!canConfigure || busy}>Configure virtual cassette</button></div>
     <div className="divider-line" />
     <div className="hil-setup-grid customer-ops">
-      <div><label className="field-label" htmlFor="hil-customer-pin">CUSTOMER DEMO PIN</label><input id="hil-customer-pin" type="password" inputMode="numeric" value={customerPin} onChange={event => setCustomerPin(event.target.value.replace(/[^0-9]/g, '').slice(0, 6))} autoComplete="off" disabled={busy || !pairReady} /></div>
-      <div><label className="field-label" htmlFor="hil-withdraw-amount">WITHDRAWAL AMOUNT (₹)</label><input id="hil-withdraw-amount" inputMode="numeric" value={withdrawAmount} onChange={event => setWithdrawAmount(event.target.value)} disabled={busy || !pairReady} /></div>
+      <div><label className="field-label" htmlFor="hil-customer-pin">CUSTOMER DEMO PIN</label><input id="hil-customer-pin" type="password" inputMode="numeric" value={customerPin} onChange={event => setCustomerPin(event.target.value.replace(/[^0-9]/g, '').slice(0, 6))} autoComplete="off" disabled={busy || !customerOpsAllowed} /></div>
+      <div><label className="field-label" htmlFor="hil-withdraw-amount">WITHDRAWAL AMOUNT (₹)</label><input id="hil-withdraw-amount" inputMode="numeric" value={withdrawAmount} onChange={event => setWithdrawAmount(event.target.value)} disabled={busy || !customerOpsAllowed} /></div>
     </div>
     <div className="hil-action-row">
       <button className="board-button" onClick={() => void useCard()} disabled={!customerOpsAllowed || busy}>Insert demo card</button>
       <button className="board-button" onClick={() => void submitPin()} disabled={!customerOpsAllowed || busy || !customerPin}>Verify PIN</button>
-      <button className="board-button" onClick={() => void send('uno', 'BALANCE')} disabled={!customerOpsAllowed || busy}>Check balance</button>
+      <button className="board-button" onClick={() => void send('BALANCE', () => adapter.requestBalance())} disabled={!customerOpsAllowed || busy}>Check balance</button>
       <button className="board-button" onClick={() => void withdraw()} disabled={!customerOpsAllowed || busy}>Request withdrawal</button>
-      <button className="board-button danger-command" onClick={() => void send('uno', 'FIXTURE_MISMATCH')} disabled={!customerOpsAllowed || busy}>Inject synthetic mismatch</button>
+      <button className="board-button danger-command" onClick={() => void send('FIXTURE_MISMATCH', () => adapter.injectMismatchFixture())} disabled={!customerOpsAllowed || busy}>Inject synthetic mismatch</button>
     </div>
+    {!pairReady && <p className="muted-note">The Uno and ESP32 must both be connected and continuously report fresh HEALTHY / OBSERVING states. USB-open alone is not readiness.</p>}
+    {researchMode !== 'HIL' && <div className="hardware-notice"><CircleAlert size={16} /><p>Switch to explicit HIL mode before commissioning or issuing customer commands. The host process enforces this gate independently of the renderer.</p></div>}
+    {hilFaultLatched && <div className="hardware-notice"><CircleAlert size={16} /><p>HIL authority is fault-latched. Customer/setup actions are disabled until both boards reboot after the fault, fresh paired readiness returns, and the host latch is explicitly cleared.</p></div>}
+    {hilShadow.status === 'RECONCILIATION REQUIRED' && <div className="hardware-notice"><CircleAlert size={16} /><p>{hilShadow.error || 'HIL shadow evidence is inconsistent. Cash state remains frozen until paired reset and recommissioning.'}</p></div>}
     {feedback && <div className="hardware-notice"><CircleAlert size={16} /><p>{feedback}</p></div>}
-    <p className="muted-note">All values are fictional and RAM-only on the boards. Provisioning does not mean the board accepted it until a corresponding ATM_EVENT appears. PIN fields are cleared after use and are not copied into the serial event journal.</p>
+    <p className="muted-note">All values are fictional and RAM-only on the boards. Account/cassette changes enter the shadow only after matching board-reported events. PIN fields are cleared after use and never enter evidence records.</p>
   </>;
 }
 
