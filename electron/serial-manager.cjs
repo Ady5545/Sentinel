@@ -377,7 +377,7 @@ class SerialManager extends EventEmitter {
         return;
       } else if (!candidate) {
         // Ignore an empty line, but keep framing synchronized.
-      } else if (candidate !== candidate.trim() || /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/.test(candidate)) {
+      } else if (candidate !== candidate.trim() || /[^\x20-\x7E]/.test(candidate)) {
         this.rejectInput(state, 'MALFORMED_LINE', 'Malformed serial line rejected; board readiness invalidated.');
         return;
       } else {
