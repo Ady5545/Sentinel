@@ -105,7 +105,7 @@ test("Uno receiver diagnostics distinguish missing bytes from incomplete lines",
   assert.ok(uno.includes("byte_age_ms="));
   assert.ok(uno.includes("line_age_ms="));
   assert.ok(uno.includes("++guardianRxByteCount;"));
-  assert.ok(uno.includes("guardianRxLineCount++"));
+  assert.ok(uno.includes("++guardianRxLineCount;"));
 });
 
 test("ESP32 flushes completed STATUS bytes locally without claiming peer acceptance", () => {
