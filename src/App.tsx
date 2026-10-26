@@ -14,6 +14,8 @@ type DeviceKey = 'uno' | 'sentinel';
 type Port = { path: string; manufacturer?: string; vendorId?: string; productId?: string; serialNumber?: string };
 type BoardPhase = 'DISCONNECTED' | 'USB OPEN' | 'BOOTED' | 'NEGOTIATING' | 'HEALTHY' | 'OBSERVING' | 'REVOKED' | 'ERROR';
 type BoardState = { connected: boolean; path: string; lastLine: string; phase: BoardPhase; error?: string };
+type HilTransactionPhase = 'REQUESTED' | 'PERMIT OBSERVED' | 'UNO COMMITTED' | 'RECONCILED' | 'DENIED' | 'REVOKED' | 'MISMATCH';
+type HilTransaction = { id: string; amount: number; phase: HilTransactionPhase; unoCommitSeen: boolean; guardianCommitSeen: boolean; balance?: number; message: string };
 const serviceList: { id: Service; label: string; subtitle: string; icon: typeof Banknote }[] = [
   { id: 'withdrawal', label: 'Cash withdrawal', subtitle: 'Dispense virtual banknotes', icon: Banknote },
   { id: 'balance', label: 'Balance inquiry', subtitle: 'View available funds', icon: WalletCards },
@@ -25,6 +27,7 @@ const initialBoards: Record<DeviceKey, BoardState> = {
   uno: { connected: false, path: '', lastLine: '', phase: 'DISCONNECTED' },
   sentinel: { connected: false, path: '', lastLine: '', phase: 'DISCONNECTED' }
 };
+const parseKeyValueText = (value: string) => Object.fromEntries(value.split(';').map(part => { const index = part.indexOf('='); return index < 1 ? ['', ''] : [part.slice(0, index), part.slice(index + 1)]; }).filter(([key]) => key));
 const money = (value: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(value);
 const clock = () => new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 
@@ -40,6 +43,7 @@ export default function App() {
   const [boards, setBoards] = useState<Record<DeviceKey, BoardState>>(initialBoards);
   const [runtime, setRuntime] = useState<{ platform: string; version: string; packaged: boolean } | null>(null);
   const [serialEvents, setSerialEvents] = useState<string[]>([]);
+  const [hilTransaction, setHilTransaction] = useState<HilTransaction | null>(null);
   const [portMessage, setPortMessage] = useState('Board access is optional. The virtual ATM works without hardware.');
 
   useEffect(() => {
@@ -50,6 +54,59 @@ export default function App() {
     const unsubscribe = api.onSerialEvent(event => {
       const detail = event.kind === 'line' ? event.line : event.message || event.kind;
       setSerialEvents(previous => [...previous.slice(-79), clock() + '  ' + event.device.toUpperCase() + '  ' + detail]);
+      if (event.kind === 'line' && event.line) {
+        const line = event.line;
+        if (event.device === 'uno' && line.startsWith('ATM_EVENT|')) {
+          const [, eventName, ...detailParts] = line.split('|');
+          const fields = parseKeyValueText(detailParts.join('|'));
+          if (eventName === 'WITHDRAWAL_PENDING') {
+            const amount = Number(fields.amount);
+            if (fields.id && Number.isSafeInteger(amount) && amount > 0) {
+              setHilTransaction({ id: fields.id, amount, phase: 'REQUESTED', unoCommitSeen: false, guardianCommitSeen: false, message: 'Uno reported a pending fictional withdrawal; waiting for the guardian decision.' });
+            } else {
+              setHilTransaction({ id: fields.id || 'UNKNOWN', amount: Number.isFinite(amount) ? amount : 0, phase: 'MISMATCH', unoCommitSeen: false, guardianCommitSeen: false, message: 'Malformed board-reported withdrawal-pending event; no desktop authorization is inferred.' });
+            }
+          } else if (eventName === 'WITHDRAWAL_APPROVED') {
+            const amount = Number(fields.amount);
+            const balance = Number(fields.balance);
+            setHilTransaction(previous => {
+              if (!previous || previous.id !== fields.id || previous.amount !== amount) {
+                return { id: fields.id || 'UNKNOWN', amount: Number.isFinite(amount) ? amount : 0, phase: 'MISMATCH', unoCommitSeen: true, guardianCommitSeen: false, balance: Number.isFinite(balance) ? balance : undefined, message: 'Uno commit report did not match the active HIL request; desktop must not infer a successful dispense.' };
+              }
+              const reconciled = previous.guardianCommitSeen;
+              return { ...previous, unoCommitSeen: true, balance: Number.isFinite(balance) ? balance : previous.balance, phase: reconciled ? 'RECONCILED' : 'UNO COMMITTED', message: reconciled ? 'Uno commit and guardian reconciliation observed for the same transaction.' : 'Uno reports a commit; waiting for guardian commit reconciliation.' };
+            });
+          } else if (eventName === 'WITHDRAWAL_DENIED') {
+            setHilTransaction(previous => previous ? { ...previous, phase: 'DENIED', message: 'Uno reported a withdrawal denial. No desktop virtual-cash update is inferred.' } : previous);
+          } else if (eventName === 'GUARDIAN_REVOKED') {
+            setHilTransaction(previous => previous ? { ...previous, phase: 'REVOKED', message: 'Uno reported guardian revocation; protected HIL remains denied.' } : previous);
+          }
+        } else if (event.device === 'sentinel' && line.startsWith('[PERMIT] One-shot observation issued for ')) {
+          const match = line.slice(line.indexOf('for ') + 4).split(';');
+          const id = match[0] || '';
+          const amount = Number((match[1] || '').replace('amount=', ''));
+          setHilTransaction(previous => {
+            if (!previous || previous.id !== id || previous.amount !== amount) {
+              return { id: id || 'UNKNOWN', amount: Number.isFinite(amount) ? amount : 0, phase: 'MISMATCH', unoCommitSeen: false, guardianCommitSeen: false, message: 'Guardian permit does not match the active Uno transaction. No desktop virtual-cash update is allowed.' };
+            }
+            return { ...previous, phase: previous.unoCommitSeen ? 'UNO COMMITTED' : 'PERMIT OBSERVED', message: 'Guardian permit report matches the pending Uno transaction ID and amount; waiting for the Uno commit and guardian reconciliation.' };
+          });
+        } else if (event.device === 'sentinel' && line.startsWith('[DENY] ')) {
+          const fields = parseKeyValueText(line.slice('[DENY] '.length));
+          setHilTransaction(previous => previous && (!fields.id || fields.id === previous.id)
+            ? { ...previous, phase: 'DENIED', message: 'Guardian reported DENY' + (fields.reason ? ': ' + fields.reason : '') + '.' }
+            : previous);
+        } else if (event.device === 'sentinel' && line.includes('[AUDIT] Matching controller-reported virtual transaction commit observed.')) {
+          setHilTransaction(previous => previous ? {
+            ...previous,
+            guardianCommitSeen: true,
+            phase: previous.unoCommitSeen ? 'RECONCILED' : previous.phase,
+            message: previous.unoCommitSeen ? 'Uno commit and guardian reconciliation have both been observed for this transaction.' : 'Guardian reports matching commit reconciliation; waiting for the Uno USB commit event before showing a completed HIL result.'
+          } : previous);
+        } else if (line.includes('[REVOKE]') || line.includes('[SECURITY_LOCK]') || line.includes('GUARDIAN_STATUS|mode=REVOKED') || line.includes('GUARDIAN_REVOKED')) {
+          setHilTransaction(previous => previous ? { ...previous, phase: 'REVOKED', message: 'A board reported revocation/lock. Protected HIL is closed; reset and recommission before another transaction.' } : previous);
+        }
+      }
       setBoards(previous => {
         const current = previous[event.device];
         const line = event.kind === 'line' ? (event.line || '') : '';
@@ -200,7 +257,7 @@ export default function App() {
         {view === 'sentinel' && <SentinelView state={state} boards={boards} />}
         {view === 'experiments' && <ExperimentView state={state} dispatch={dispatch} />}
         {view === 'journal' && <JournalView events={[...state.events].reverse()} alerts={alerts} onExport={exportEvidence} />}
-        {view === 'hardware' && <HardwareView ports={ports} chosenPort={chosenPort} setChosenPort={setChosenPort} boards={boards} message={portMessage} serialEvents={serialEvents} refresh={refreshPorts} connect={connectBoard} disconnect={disconnectBoard} sendCommand={sendBoardCommand} />}
+        {view === 'hardware' && <HardwareView ports={ports} chosenPort={chosenPort} setChosenPort={setChosenPort} boards={boards} message={portMessage} serialEvents={serialEvents} refresh={refreshPorts} connect={connectBoard} disconnect={disconnectBoard} sendCommand={sendBoardCommand} hilTransaction={hilTransaction} />}
         <footer className="status-footer"><span><i /> DOMAIN CORE ACTIVE</span><span>{eventCount.toString().padStart(3,'0')} EVENTS · {alerts.toString().padStart(2,'0')} ALERTS</span><span>FICTIONAL ACCOUNT · VIRTUAL CASH · RESEARCH PROTOTYPE</span></footer>
       </div>
     </main>
@@ -335,12 +392,112 @@ function JournalRow({ event }: { event: JournalEvent }) {
   return <article className={'journal-row severity-' + event.severity}><div className="journal-icon">{icon}</div><time>{event.at}</time><div className="journal-copy"><strong>{event.title}</strong><p>{event.detail}</p><small>{event.source} · {event.id}</small></div><span className="severity-tag">{event.severity.toUpperCase()}</span></article>;
 }
 
-function HardwareView({ ports, chosenPort, setChosenPort, boards, message, serialEvents, refresh, connect, disconnect, sendCommand }: {
+function HILOperatorControls({ pairReady, unoConnected, sendCommand }: {
+  pairReady: boolean;
+  unoConnected: boolean;
+  sendCommand: (device: DeviceKey, command: string) => Promise<{ ok: boolean; error?: string; commandName?: string; sensitive?: boolean }>;
+}) {
+  const [cardId, setCardId] = useState('CARD01');
+  const [demoPin, setDemoPin] = useState('');
+  const [startingBalance, setStartingBalance] = useState('50000');
+  const [cash500, setCash500] = useState('20');
+  const [cash200, setCash200] = useState('20');
+  const [cash100, setCash100] = useState('20');
+  const [cash50, setCash50] = useState('20');
+  const [withdrawAmount, setWithdrawAmount] = useState('500');
+  const [customerPin, setCustomerPin] = useState('');
+  const [feedback, setFeedback] = useState('');
+  const [busy, setBusy] = useState(false);
+  const send = async (device: DeviceKey, command: string) => {
+    setBusy(true);
+    try {
+      const result = await sendCommand(device, command);
+      setFeedback(result.ok ? (result.commandName || 'Command') + ' written; verify the board-reported response below.' : result.error || 'Command failed.');
+      return result.ok;
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : String(error));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+  const provision = async () => {
+    if (!/^[A-Z0-9_-]{1,16}$/.test(cardId) || !/^[0-9]{4,6}$/.test(demoPin) ||
+        !/^(0|[1-9][0-9]*)$/.test(startingBalance) || Number(startingBalance) > 1000000) {
+      setFeedback('Use an uppercase card ID, a fictional 4–6 digit PIN and a balance from 0 to 1,000,000.');
+      setDemoPin('');
+      return;
+    }
+    const pin = demoPin;
+    setDemoPin('');
+    const ok = await send('uno', 'ADD_ACCOUNT ' + cardId + ' ' + pin + ' ' + startingBalance);
+    if (ok) setFeedback('Account provisioning command written. Confirm ATM_EVENT|ACCOUNT_PROVISIONED before proceeding.');
+  };
+  const configureCash = async () => {
+    const values = [cash500, cash200, cash100, cash50];
+    if (values.some(value => !/^(0|[1-9][0-9]*)$/.test(value) || Number(value) > 9999)) {
+      setFeedback('Each fictional note count must be an integer from 0 to 9999.');
+      return;
+    }
+    await send('uno', 'SET_CASH ' + values.join(' '));
+  };
+  const useCard = async () => {
+    if (!pairReady) { setFeedback('Blocked: both boards must report the current healthy pair state first.'); return; }
+    await send('uno', 'CARD ' + cardId);
+  };
+  const submitPin = async () => {
+    if (!/^[0-9]{4,6}$/.test(customerPin)) { setFeedback('Enter the fictional demo PIN used when provisioning.'); setCustomerPin(''); return; }
+    const pin = customerPin;
+    setCustomerPin('');
+    if (!pairReady) { setFeedback('Blocked: protected HIL is not ready.'); return; }
+    await send('uno', 'PIN ' + pin);
+  };
+  const withdraw = async () => {
+    if (!/^[1-9][0-9]*$/.test(withdrawAmount) || Number(withdrawAmount) > 1000000 || Number(withdrawAmount) % 50 !== 0) {
+      setFeedback('Withdrawal must be a positive amount, no more than 1,000,000, and a multiple of ₹50.');
+      return;
+    }
+    if (!pairReady) { setFeedback('Blocked: protected HIL is not ready.'); return; }
+    await send('uno', 'WITHDRAW ' + withdrawAmount);
+  };
+  return <>
+    <div className="hil-setup-grid">
+      <div><label className="field-label" htmlFor="hil-card">DEMO CARD ID</label><input id="hil-card" value={cardId} onChange={event => setCardId(event.target.value.toUpperCase())} maxLength={16} autoComplete="off" disabled={busy} /></div>
+      <div><label className="field-label" htmlFor="hil-pin">NEW FICTIONAL PIN</label><input id="hil-pin" type="password" inputMode="numeric" value={demoPin} onChange={event => setDemoPin(event.target.value.replace(/[^0-9]/g, '').slice(0, 6))} autoComplete="new-password" disabled={busy} /></div>
+      <div><label className="field-label" htmlFor="hil-balance">STARTING BALANCE (₹)</label><input id="hil-balance" inputMode="numeric" value={startingBalance} onChange={event => setStartingBalance(event.target.value)} disabled={busy} /></div>
+    </div>
+    <div className="hil-action-row"><button className="board-button" onClick={() => void provision()} disabled={!unoConnected || busy}>Provision fictional account</button></div>
+    <div className="hil-setup-grid cash-counts">
+      <div><label className="field-label" htmlFor="hil-c500">₹500 NOTES</label><input id="hil-c500" inputMode="numeric" value={cash500} onChange={event => setCash500(event.target.value)} disabled={busy} /></div>
+      <div><label className="field-label" htmlFor="hil-c200">₹200 NOTES</label><input id="hil-c200" inputMode="numeric" value={cash200} onChange={event => setCash200(event.target.value)} disabled={busy} /></div>
+      <div><label className="field-label" htmlFor="hil-c100">₹100 NOTES</label><input id="hil-c100" inputMode="numeric" value={cash100} onChange={event => setCash100(event.target.value)} disabled={busy} /></div>
+      <div><label className="field-label" htmlFor="hil-c50">₹50 NOTES</label><input id="hil-c50" inputMode="numeric" value={cash50} onChange={event => setCash50(event.target.value)} disabled={busy} /></div>
+    </div>
+    <div className="hil-action-row"><button className="board-button" onClick={() => void configureCash()} disabled={!unoConnected || busy}>Configure virtual cassette</button></div>
+    <divider />
+    <div className="hil-setup-grid customer-ops">
+      <div><label className="field-label" htmlFor="hil-customer-pin">CUSTOMER DEMO PIN</label><input id="hil-customer-pin" type="password" inputMode="numeric" value={customerPin} onChange={event => setCustomerPin(event.target.value.replace(/[^0-9]/g, '').slice(0, 6))} autoComplete="off" disabled={busy || !pairReady} /></div>
+      <div><label className="field-label" htmlFor="hil-withdraw-amount">WITHDRAWAL AMOUNT (₹)</label><input id="hil-withdraw-amount" inputMode="numeric" value={withdrawAmount} onChange={event => setWithdrawAmount(event.target.value)} disabled={busy || !pairReady} /></div>
+    </div>
+    <div className="hil-action-row">
+      <button className="board-button" onClick={() => void useCard()} disabled={!pairReady || busy}>Insert demo card</button>
+      <button className="board-button" onClick={() => void submitPin()} disabled={!pairReady || busy || !customerPin}>Verify PIN</button>
+      <button className="board-button" onClick={() => void send('uno', 'BALANCE')} disabled={!pairReady || busy}>Check balance</button>
+      <button className="board-button" onClick={() => void withdraw()} disabled={!pairReady || busy}>Request withdrawal</button>
+      <button className="board-button danger-command" onClick={() => void send('uno', 'FIXTURE_MISMATCH')} disabled={!pairReady || busy}>Inject synthetic mismatch</button>
+    </div>
+    {feedback && <div className="hardware-notice"><CircleAlert size={16} /><p>{feedback}</p></div>}
+    <p className="muted-note">All values are fictional and RAM-only on the boards. Provisioning does not mean the board accepted it until a corresponding ATM_EVENT appears. PIN fields are cleared after use and are not copied into the serial event journal.</p>
+  </>;
+}
+
+function HardwareView({ ports, chosenPort, setChosenPort, boards, message, serialEvents, refresh, connect, disconnect, sendCommand, hilTransaction }: {
   ports: Port[]; chosenPort: Record<DeviceKey, string>;
   setChosenPort: Dispatch<SetStateAction<Record<DeviceKey, string>>>;
   boards: Record<DeviceKey, BoardState>; message: string; serialEvents: string[];
   refresh: () => void; connect: (device: DeviceKey) => void; disconnect: (device: DeviceKey) => void;
   sendCommand: (device: DeviceKey, command: string) => Promise<{ ok: boolean; error?: string; commandName?: string; sensitive?: boolean }>;
+  hilTransaction: HilTransaction | null;
 }) {
   const [drafts, setDrafts] = useState<Record<DeviceKey, string>>({ uno: 'STATUS', sentinel: 'STATUS' });
   const [commandBusy, setCommandBusy] = useState(false);
@@ -404,6 +561,24 @@ function HardwareView({ ports, chosenPort, setChosenPort, boards, message, seria
         </form>
       </section>;
     })}</div>
+
+    <section className="data-panel hil-operator-panel">
+      <PanelTitle icon={<Cpu size={16} />} title="UNO / SENTINEL OPERATOR WORKFLOW" suffix="FICTIONAL DEMO ONLY" />
+      <p className="muted-note">This panel sends allowlisted commands to the connected boards. It does not drive physical cash hardware. A local USB write is not proof the board accepted a command.</p>
+      <HILOperatorControls pairReady={pairReady} unoConnected={boards.uno.connected} sendCommand={sendCommand} />
+    </section>
+    <section className="data-panel hil-transaction-panel">
+      <PanelTitle icon={<Activity size={16} />} title="HIL TRANSACTION CORRELATION" suffix="BOARD-REPORTED / PROTOCOL-EVIDENCE" />
+      {!hilTransaction && <div className="empty-state">No HIL withdrawal has been observed in this session. A successful board transaction must match by ID and amount, and both the Uno commit and guardian reconciliation must be observed.</div>}
+      {hilTransaction && <>
+        <div className="authority-row"><span>Transaction ID</span><b>{hilTransaction.id}</b></div>
+        <div className="authority-row"><span>Requested amount</span><b>{money(hilTransaction.amount)}</b></div>
+        <div className="authority-row"><span>Lifecycle state</span><b className={hilTransaction.phase === 'RECONCILED' ? 'green-text' : hilTransaction.phase === 'DENIED' || hilTransaction.phase === 'REVOKED' || hilTransaction.phase === 'MISMATCH' ? 'red-text' : ''}>{hilTransaction.phase}</b></div>
+        {hilTransaction.balance !== undefined && <div className="authority-row"><span>Uno-reported remaining balance</span><b>{money(hilTransaction.balance)}</b></div>}
+        <p className="muted-note">{hilTransaction.message}</p>
+        <p className="muted-note">{hilTransaction.phase === 'RECONCILED' ? 'Both relevant board reports have been observed for this transaction. This remains board-reported evidence, not cryptographic attestation; no desktop shadow-cash mutation is performed by this initial bridge.' : 'The desktop does not mark this as a completed HIL withdrawal or change its software-simulation ledger.'}</p>
+      </>}
+    </section>
     {commandFeedback && <div className="hardware-notice"><CircleAlert size={16} /><p>{commandFeedback}</p></div>}
     <section className="data-panel serial-log"><PanelTitle icon={<Terminal size={16} />} title="USB SERIAL OBSERVATION" suffix="RAW LINES / NOT ATTESTATION" />{serialEvents.length ? serialEvents.slice(-15).reverse().map((line,index) => <p key={index}>{line}</p>) : <div className="empty-state">No serial events yet. Simulation mode remains fully available.</div>}</section>
     <div className="scientific-note"><CircleAlert size={16} /><p>This bridge can transmit only allowlisted operator commands and displays incoming console lines, but it does not yet perform full desktop transaction correlation. It intentionally blocks customer/withdrawal/fixture commands until both boards report ready.</p></div>
