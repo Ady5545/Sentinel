@@ -10,7 +10,7 @@ import {
 } from './core/atm-engine';
 import {
   canBeginHilWithdrawal, parseKeyValueText, redactSensitiveSerialText, reduceHilTransaction,
-  type HilTransaction
+  reduceStructuredHilTransaction, type HilTransaction
 } from './core/hil-evidence';
 
 type View = 'terminal' | 'machine' | 'sentinel' | 'experiments' | 'journal' | 'hardware';
@@ -82,7 +82,9 @@ export default function App() {
         setHilTransaction(previous => invalidateInFlightHilTransaction(previous, 'A board boot/session-start record was observed. Previous readiness and any unresolved transaction are invalidated.'));
       }
       if (event.kind === 'line' && event.line) {
-        setHilTransaction(previous => reduceHilTransaction(previous, event.device, event.line || ''));
+        setHilTransaction(previous => event.parsed
+          ? reduceStructuredHilTransaction(previous, event.device, event.parsed)
+          : reduceHilTransaction(previous, event.device, event.line || ''));
       }
       setBoards(previous => {
         const current = previous[event.device];
