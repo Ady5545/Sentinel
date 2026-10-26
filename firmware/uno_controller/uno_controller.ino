@@ -1,7 +1,7 @@
 /*
  * SENTINEL ATM Controller Firmware V3.4
  * Target: Arduino Uno / ATmega328P
- * ESP32 link: SoftwareSerial RX=D8, TX=D9, 4800 8N1
+ * ESP32 link: AltSoftSerial RX=D8, TX=D9, 4800 8N1
  * Desktop/operator USB link: Serial at 115200
  *
  * Educational ATM controller only. No real PIN pad, card reader, cash hardware,
@@ -13,7 +13,7 @@
  * credential storage. Use only fictional demo values.
  */
 #include <Arduino.h>
-#include <SoftwareSerial.h>
+#include <AltSoftSerial.h>
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
@@ -47,7 +47,7 @@ static const size_t FRAME_MAX = 120;
 static const size_t USB_LINE_MAX = 96;
 static const uint8_t JOURNAL_SIZE = 8;
 
-SoftwareSerial GuardianSerial(PEER_RX_PIN, PEER_TX_PIN);
+AltSoftSerial GuardianSerial;
 
 enum AtmState {
   ATM_UNCOMMISSIONED,
@@ -1282,7 +1282,6 @@ void pollUsb() {
 void setup() {
   Serial.begin(USB_BAUD);
   GuardianSerial.begin(PEER_BAUD);
-  GuardianSerial.listen();
   memset(accounts, 0, sizeof(accounts));
   makeSession();
   budgetWindowStartedAt = millis();
@@ -1293,11 +1292,11 @@ void setup() {
   Serial.println(F("No default card or PIN exists. Runtime provisioning required."));
   Serial.print(F("BUILD (self-reported): "));
   Serial.println(F("UNO-ATM-V3.4"));
-  Serial.print(F("PEER UART: SoftwareSerial RX=D"));
+  Serial.print(F("PEER UART: AltSoftSerial RX=D"));
   Serial.print(PEER_RX_PIN);
   Serial.print(F(" TX=D"));
   Serial.print(PEER_TX_PIN);
-  Serial.println(F(" / SoftwareSerial 4800 8N1; PWM D10 available"));
+  Serial.println(F(" / AltSoftSerial 4800 8N1; PWM D10 available"));
   Serial.print(F("SESSION: "));
   Serial.println(sessionId);
   printHelp();
