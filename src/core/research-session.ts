@@ -44,6 +44,16 @@ export interface ResearchRunRecord {
   readonly events: readonly ResearchEvent[];
 }
 
+function freezeRunRecord(run: ResearchRunRecord): ResearchRunRecord {
+  return Object.freeze({
+    ...run,
+    boardSessions: Object.freeze({ ...run.boardSessions }),
+    activeTransaction: run.activeTransaction ? Object.freeze({ ...run.activeTransaction }) : null,
+    processedTransactionIds: Object.freeze([...run.processedTransactionIds]),
+    events: Object.freeze([...run.events])
+  });
+}
+
 export type ResearchAction =
   | { type: 'SET_MODE'; mode: ResearchMode; at?: string }
   | { type: 'BOARD_SESSION'; role: 'UNO' | 'SENTINEL'; sessionId: string; at?: string }
@@ -57,11 +67,11 @@ export type ResearchAction =
 
 export function createResearchRun(runId: string, mode: ResearchMode, at = new Date().toISOString()): ResearchRunRecord {
   if (!/^[A-Za-z0-9_-]{1,80}$/.test(runId)) throw new Error('Run ID must be a short opaque identifier.');
-  return {
+  return freezeRunRecord({
     schemaVersion: RESEARCH_RUN_SCHEMA_VERSION, runId, mode, phase: 'ACTIVE', startedAt: at,
     boardSessions: { uno: null, sentinel: null }, activeTransaction: null,
     processedTransactionIds: [], correlatedCommitCount: 0, freezeReason: null, events: []
-  };
+  });
 }
 
 function safeDetail(detail: string): string {
@@ -89,7 +99,7 @@ function appendEvent(
     ...(amount !== undefined ? { amount } : {}),
     detail: safeDetail(detail)
   });
-  return { ...run, events: [...run.events, event] };
+  return freezeRunRecord({ ...run, events: [...run.events, event] });
 }
 
 function freeze(run: ResearchRunRecord, reason: string, at: string, role: ResearchRole): ResearchRunRecord {
