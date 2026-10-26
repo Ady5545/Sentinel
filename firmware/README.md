@@ -6,6 +6,7 @@ This contains the v2 educational ATM-controller and independent-guardian firmwar
 - [ESP32 independent guardian](esp32_guardian/esp32_guardian.ino)
 - [v2 implementation and test contract](../docs/FIRMWARE_V1_IMPLEMENTATION.md)
 - [v2 protocol specification](../docs/SENTINEL_PROTOCOL.md)
+- [V3 firmware reliability and hardening implementation plan](../docs/FIRMWARE_V3_IMPLEMENTATION_PLAN.md)
 
 ## Roles
 
