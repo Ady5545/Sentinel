@@ -583,7 +583,7 @@ void printHelp() {
   Serial.println(F("  ADD_ACCOUNT <CARD_ID> <4-6_DIGIT_PIN> <START_BALANCE>"));
   Serial.println(F("  SET_CASH <COUNT_500> <COUNT_200> <COUNT_100> <COUNT_50>"));
   Serial.println(F("  SET_POLICY <MAX_TXN> <WINDOW_LIMIT> [WINDOW_MS PIN_TRIES LOCKOUT_MS PIN_TIMEOUT_MS SESSION_TIMEOUT_MS GUARDIAN_TIMEOUT_MS]"));
-  Serial.println(F("  CARD <CARD_ID> | PIN <PIN> | BALANCE | WITHDRAW <AMOUNT>"));
+  Serial.println(F("  CARD <CARD_ID> | PIN <PIN> | BALANCE | WITHDRAW <AMOUNT> | CHANGE_PIN <CURRENT> <NEW> <CONFIRM>"));
   Serial.println(F("  CANCEL | LOGOUT | STATUS | JOURNAL | HELP | FIXTURE_MISMATCH"));
   Serial.println(F("Accounts/PINs/cash are RAM-only and are erased on reset."));
 }
@@ -719,6 +719,25 @@ void handleCard(const char *card) {
   sendFrame(F("EVENT"), F("source=BOARD_REPORTED;event=CARD_ACCEPTED"));
 }
 
+void recordPinFailure(Account &a) {
+  if (a.failedPins < 255) ++a.failedPins;
+  char details[32];
+  const uint8_t remaining = a.failedPins >= maxPinFailures ? 0 : (uint8_t)(maxPinFailures - a.failedPins);
+  snprintf_P(details, sizeof(details), PSTR("remaining=%u"), (unsigned)remaining);
+  emitEvent(F("PIN_FAILED"), details);
+  char eventPayload[48];
+  snprintf_P(eventPayload, sizeof(eventPayload), PSTR("source=BOARD_REPORTED;event=PIN_FAIL;count=%u"), (unsigned)a.failedPins);
+  sendFrame(F("EVENT"), eventPayload);
+  if (a.failedPins >= maxPinFailures) {
+    a.lockoutUntil = millis() + pinLockoutMs;
+    char lockDetails[28];
+    snprintf_P(lockDetails, sizeof(lockDetails), PSTR("duration_ms=%lu"), pinLockoutMs);
+    emitEvent(F("CARD_LOCKED"), lockDetails);
+    resetCustomerSession();
+    setAtmState(ATM_LOCKED);
+  }
+}
+
 void handlePin(char *pin) {
   if (atmState != ATM_PIN_PENDING || activeAccount < 0) {
     emitEvent(F("PIN_REJECTED"), F("reason=no_card_waiting"));
@@ -731,21 +750,7 @@ void handlePin(char *pin) {
   }
   Account &a = accounts[(uint8_t)activeAccount];
   if (!validPin(pin) || !pinEqualsConstantWork(pin, a.pin)) {
-    ++a.failedPins;
-    char details[32];
-    snprintf_P(details, sizeof(details), PSTR("remaining=%u"), (unsigned)(maxPinFailures - (a.failedPins < maxPinFailures ? a.failedPins : maxPinFailures)));
-    emitEvent(F("PIN_FAILED"), details);
-    char eventPayload[48];
-    snprintf_P(eventPayload, sizeof(eventPayload), PSTR("source=BOARD_REPORTED;event=PIN_FAIL;count=%u"), (unsigned)a.failedPins);
-    sendFrame(F("EVENT"), eventPayload);
-    if (a.failedPins >= maxPinFailures) {
-      a.lockoutUntil = millis() + pinLockoutMs;
-      char lockDetails[28];
-      snprintf_P(lockDetails, sizeof(lockDetails), PSTR("duration_ms=%lu"), pinLockoutMs);
-      emitEvent(F("CARD_LOCKED"), lockDetails);
-      resetCustomerSession();
-      setAtmState(ATM_LOCKED);
-    }
+    recordPinFailure(a);
     return;
   }
   a.failedPins = 0;
@@ -755,6 +760,29 @@ void handlePin(char *pin) {
   emitEvent(F("AUTHENTICATED"), details);
   sendFrame(F("EVENT"), F("source=BOARD_REPORTED;event=PIN_OK"));
   setAtmState(ATM_AUTHENTICATED);
+}
+
+void handleChangePin(char *currentPin, char *newPin, char *confirmation) {
+  if (atmState != ATM_AUTHENTICATED || activeAccount < 0 || !guardianFresh()) {
+    emitEvent(F("PIN_CHANGE_DENIED"), F("reason=not_authenticated_or_guardian"));
+    return;
+  }
+  Account &a = accounts[(uint8_t)activeAccount];
+  if (!validPin(currentPin) || !pinEqualsConstantWork(currentPin, a.pin)) {
+    recordPinFailure(a);
+    return;
+  }
+  if (!validPin(newPin) || !validPin(confirmation) ||
+      !pinEqualsConstantWork(newPin, confirmation)) {
+    emitEvent(F("PIN_CHANGE_DENIED"), F("reason=invalid_format_or_confirmation_mismatch"));
+    return;
+  }
+  strncpy(a.pin, newPin, sizeof(a.pin) - 1);
+  a.pin[sizeof(a.pin) - 1] = '\0';
+  a.failedPins = 0;
+  lastCustomerActivityAt = millis();
+  emitEvent(F("PIN_CHANGED"), F("storage=RAM_ONLY;credential_not_logged"));
+  sendFrame(F("EVENT"), F("source=BOARD_REPORTED;event=PIN_CHANGED"));
 }
 
 void handleBalance() {
@@ -867,6 +895,8 @@ void handleCommand(char *line) {
     handleCard(argv[1]);
   } else if (STREQ(argv[0], "PIN") && argc == 2) {
     handlePin(argv[1]);
+  } else if (STREQ(argv[0], "CHANGE_PIN") && argc == 4) {
+    handleChangePin(argv[1], argv[2], argv[3]);
   } else if (STREQ(argv[0], "BALANCE") && argc == 1) {
     handleBalance();
   } else if (STREQ(argv[0], "WITHDRAW") && argc == 2) {
