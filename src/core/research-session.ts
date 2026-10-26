@@ -215,6 +215,8 @@ function isRelevantHilEvent(parsed?: StructuredBoardEvent): boolean {
     parsed.type === 'PERMIT' ||
     parsed.type === 'DENY' ||
     parsed.type === 'COMMIT_RECONCILIATION' ||
+    parsed.type === 'COMMIT_ACK_SENT' ||
+    parsed.type === 'UNO_ACK_ACCEPTED' ||
     parsed.type === 'AUTHORITY_REVOKED' ||
     (parsed.type === 'ATM_EVENT' && ['WITHDRAWAL_PENDING', 'WITHDRAWAL_APPROVED', 'WITHDRAWAL_DENIED', 'GUARDIAN_REVOKED'].includes(parsed.eventName || ''))
   ));
@@ -565,7 +567,8 @@ export function researchSessionReducer(
       runId: next.runId, unoSessionId: (reduced as CoordinatedHilTransaction).unoSessionId || null,
       sentinelSessionId: (reduced as CoordinatedHilTransaction).sentinelSessionId || null,
       permitSeen: reduced.permitSeen, unoCommitSeen: reduced.unoCommitSeen,
-      guardianCommitSeen: reduced.guardianCommitSeen, message: reduced.message
+      guardianCommitSeen: reduced.guardianCommitSeen, guardianAckSentSeen: reduced.guardianAckSentSeen,
+      unoAckAcceptedSeen: reduced.unoAckAcceptedSeen, message: reduced.message
     });
 
     if (reduced.phase === 'RECONCILED' && priorTx?.phase !== 'RECONCILED') {
