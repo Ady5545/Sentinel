@@ -26,6 +26,8 @@ jobs:
         run: npm run check:main
       - name: Run domain tests
         run: npm test
+      - name: Test release qualification tooling
+        run: npm run test:qualification
       - name: Build local renderer
         run: npm run build:renderer
       - name: Verify packaged renderer
