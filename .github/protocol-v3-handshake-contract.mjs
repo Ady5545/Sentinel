@@ -98,6 +98,22 @@ test("Uno peer UART uses timer-assisted AltSoftSerial on fixed Uno pins", () => 
   assert.match(protocol, /AltSoftSerial[\s\S]{0,100}D8 RX[\s\S]{0,40}D9 TX/i);
 });
 
+test("Uno receiver diagnostics distinguish missing bytes from incomplete lines", () => {
+  assert.ok(uno.includes("guardianRxByteCount"));
+  assert.ok(uno.includes("guardianRxLineCount"));
+  assert.ok(uno.includes("[UART_DIAG] rx_bytes="));
+  assert.ok(uno.includes("byte_age_ms="));
+  assert.ok(uno.includes("line_age_ms="));
+  assert.ok(uno.includes("guardianRxByteCount++"));
+  assert.ok(uno.includes("guardianRxLineCount++"));
+});
+
+test("ESP32 flushes completed STATUS bytes locally without claiming peer acceptance", () => {
+  assert.ok(esp.includes('if (strcmp(type, "STATUS") == 0)'));
+  assert.ok(esp.includes("Serial2.flush();"));
+  assert.ok(esp.includes("peer acceptance still unconfirmed"));
+});
+
 test("both boards use the same slower peer UART and bounded status retry contract", () => {
   assert.match(uno, /PEER_BAUD\s*=\s*4800/);
   assert.match(esp, /PEER_BAUD\s*=\s*4800/);
