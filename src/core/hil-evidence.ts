@@ -167,10 +167,23 @@ export function reduceHilTransaction(
 
     if (eventName === 'WITHDRAWAL_DENIED') {
       if (!current) return current;
-      if (fields.id && fields.id !== current.id) {
-        return mismatch(fields.id, Number(fields.amount), 'Uno denial ID differs from the active HIL transaction.');
+      const amount = Number(fields.amount);
+      if (!fields.id || fields.id !== current.id || !Number.isSafeInteger(amount) || amount !== current.amount) {
+        return {
+          ...current,
+          phase: 'MISMATCH',
+          message: 'Uno denial did not carry the exact active transaction ID and amount. Protected HIL remains frozen.'
+        };
       }
-      return { ...current, phase: 'DENIED', message: 'Uno reported a withdrawal denial. No desktop virtual-cash update is inferred.' };
+      if (current.phase === 'DENIED') return current;
+      if (['RECONCILED', 'REVOKED', 'MISMATCH'].includes(current.phase)) {
+        return {
+          ...current,
+          phase: 'MISMATCH',
+          message: 'Uno denial conflicts with an already terminal or faulted transaction lifecycle.'
+        };
+      }
+      return { ...current, phase: 'DENIED', message: 'Uno reported a matching withdrawal denial. No desktop virtual-cash update is inferred.' };
     }
 
     if (eventName === 'GUARDIAN_REVOKED') {
@@ -202,13 +215,26 @@ export function reduceHilTransaction(
   if (device === 'sentinel' && line.startsWith('[DENY] ')) {
     const fields = parseKeyValueText(line.slice('[DENY] '.length));
     if (!current) return current;
-    if (fields.id && fields.id !== current.id) {
-      return mismatch(fields.id, Number(fields.amount), 'Guardian denial ID differs from the active HIL transaction.');
+    const amount = Number(fields.amount);
+    if (!fields.id || fields.id !== current.id || !Number.isSafeInteger(amount) || amount !== current.amount) {
+      return {
+        ...current,
+        phase: 'MISMATCH',
+        message: 'Guardian denial did not carry the exact active transaction ID and amount. Protected HIL remains frozen.'
+      };
+    }
+    if (current.phase === 'DENIED') return current;
+    if (['RECONCILED', 'REVOKED', 'MISMATCH'].includes(current.phase)) {
+      return {
+        ...current,
+        phase: 'MISMATCH',
+        message: 'Guardian denial conflicts with an already terminal or faulted transaction lifecycle.'
+      };
     }
     return {
       ...current,
       phase: 'DENIED',
-      message: 'Guardian reported DENY' + (fields.reason ? ': ' + fields.reason : '') + '.'
+      message: 'Guardian reported a matching DENY' + (fields.reason ? ': ' + fields.reason : '') + '.'
     };
   }
 
