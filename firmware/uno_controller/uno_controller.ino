@@ -123,7 +123,7 @@ bool handshakeComplete = false;  // True only after the final V3 handshake ACK.
 uint32_t helloRetryCount = 0;
 bool guardianRevokeLatched = false;
 bool statePublished = false;
-/* Serialize SoftwareSerial peer traffic: one HEARTBEAT awaiting STATUS. */
+/* Serialize peer traffic: one HEARTBEAT awaiting STATUS. */
 bool awaitingGuardianStatus = false;
 char journal[JOURNAL_SIZE][32];
 uint8_t journalNext = 0;
@@ -428,8 +428,8 @@ void sendHeartbeat(uint32_t now) {
   snprintf_P(payload, sizeof(payload), PSTR("state=%S;up=%lu"),
            stateName(atmState), (unsigned long)now);
   if (sendFrame(F("HEARTBEAT"), payload)) {
-    // SoftwareSerial::print is blocking. Start the interval after the last
-    // heartbeat byte has actually left the Uno, not before transmission.
+    // Start the heartbeat interval after the complete frame transmission
+    // returns, rather than before sendFrame begins.
     lastHeartbeatAt = millis();
     awaitingGuardianStatus = true;
   }
