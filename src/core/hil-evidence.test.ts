@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   canBeginHilWithdrawal,
+  initialHilShadowState,
   parseKeyValueText,
+  planHilNotes,
+  reconcileHilShadowCommit,
   redactSensitiveSerialText,
+  reduceHilShadowObservation,
   reduceHilTransaction,
   type HilTransaction
 } from './hil-evidence';
