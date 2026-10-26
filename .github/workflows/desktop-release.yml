@@ -64,17 +64,11 @@ jobs:
           for file in release/*; do
             if [[ -f "$file" ]]; then args+=(--artifact "$file"); fi
           done
-          node scripts/release-qualification.mjs create \\
-            --commit "$GITHUB_SHA" \\
-            --target "${{ matrix.target_id }}" \\
-            --output release/qualification-manifest.json \\
-            "${args[@]}"
+          node scripts/release-qualification.mjs create --commit "$GITHUB_SHA" --target "${{ matrix.target_id }}" --output release/qualification-manifest.json "${args[@]}"
       - name: Verify manifest, checksums and exact source commit
         shell: bash
         run: |
-          node scripts/release-qualification.mjs verify \\
-            --commit "$GITHUB_SHA" \\
-            --manifest release/qualification-manifest.json
+          node scripts/release-qualification.mjs verify --commit "$GITHUB_SHA" --manifest release/qualification-manifest.json
       - name: Upload desktop artifacts
         uses: actions/upload-artifact@v4
         with:
