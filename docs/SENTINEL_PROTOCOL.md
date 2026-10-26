@@ -1,65 +1,55 @@
-# SENTINEL UNO ↔ ESP32 Protocol Specification
+# SENTINEL UNO ↔ ESP32 Protocol Specification — v2
 
-**Status:** Version 1 design contract; hardware firmware integration remains a separate gate  
+**Status:** Implemented firmware proposal; build and hardware bench validation required  
 **UART:** 9600 baud, 8 data bits, no parity, 1 stop bit  
-**USB diagnostic consoles:** 115200 baud  
-**Boards:** one Arduino Uno (primary controller stand-in) and one ESP32 DevKit (guardian stand-in)
+**USB diagnostics/desktop command link:** 115200 baud  
+**Boards:** one Arduino Uno (ATM-controller demo) + one ESP32 DevKit (guardian demo)
 
 ## Safety properties
 
-- No frame or serial text alone grants dispenser authority.
-- The desktop virtual dispenser remains the final authority for virtual inventory.
-- In protected hardware-in-the-loop mode, missing, stale, invalid or revoked guardian permission fails closed.
-- Reconnect creates a new session and never silently restores revoked authority.
-- The baseline comparison is simulation-only.
-- CRC detects accidental corruption; it does not authenticate the sender or prove firmware integrity.
+- No heartbeat, serial text or self-reported string alone authorizes dispensing.
+- The ESP32 issues a **one-shot, transaction-ID-correlated** PERMIT only after validating the current reported state, fresh heartbeat, unseen transaction ID, amount format, and guardian-side amount budget.
+- A policy rejection returns a correlated DENY. Unexpected protocol/state behavior, replay, timeout, or failed commit reconciliation latches REVOKE.
+- The Uno commits fictional balance and note inventory only after a matching permit for the current pending transaction.
+- Desktop virtual cash is a separate authority boundary and must independently deny every unpermitted transaction.
+- CRC is not authentication; session IDs and counters are not cryptographic proof.
 
 ## Frame format
 
-Version 1 uses newline-delimited ASCII frames so the Uno can parse them with a small fixed buffer:
+    S2|<type>|<session>|<seq>|<payload>|<crc16>\n
 
-`S1|<type>|<session>|<seq>|<payload>|<crc16>\n`
+- Fixed ASCII framing, newline required, maximum line length bounded by the firmware parser.
+- CRC-16/CCITT-FALSE, polynomial 0x1021, initial 0xFFFF, no reflection, xorout 0x0000, four hexadecimal digits.
+- Receivers reject malformed field counts, unsupported version, invalid session characters, invalid sequence format, CRC mismatch, overlong frames, stale/duplicate/skipped sequence and unknown message types.
+- Each direction has its own sequence counter. Reboot establishes a new session; sequence/session tokens are not cryptographic.
+- Frames and payload fields are bounded; no dynamic allocation is based on peer-controlled lengths.
 
-- `S1`: protocol version.
-- `type`: uppercase message type, e.g. `HELLO`, `HEARTBEAT`, `STATE`, `EVENT`, `ACK`, `PERMIT`, `REVOKE`, `RECOVER`.
-- `session`: bounded boot/session token (maximum 12 ASCII alphanumeric characters).
-- `seq`: unsigned decimal sequence number; each sender increments it for every emitted frame within a session.
-- `payload`: bounded printable ASCII key/value fields; `-` means empty.
-- `crc16`: four hexadecimal digits of CRC-16/CCITT-FALSE over all bytes before the final separator and CRC field.
+## Message types
 
-Maximum complete frame length is 120 bytes including newline. Receivers use fixed-size buffers, reject overlong frames, discard until the next newline after overflow, and never allocate based on incoming length. A frame without a newline is incomplete and cannot change authority.
+| Direction | Type | Meaning |
+|---|---|---|
+| UNO → ESP32 | HELLO | Starts a new demo session (UNO-ATM-V2) |
+| ESP32 → UNO | HELLO, ACK | Acknowledges protocol/session observation; no permit |
+| UNO → ESP32 | STATE | Reports atm, auth, and committed transaction count |
+| UNO → ESP32 | HEARTBEAT | Reports state and uptime; receiver timestamps receipt locally |
+| UNO → ESP32 | REQUEST | Requests guardian evaluation for one withdrawal, e.g. id=T0000001;amount=500 |
+| ESP32 → UNO | PERMIT | One-shot permit correlated to pending transaction ID |
+| ESP32 → UNO | DENY | Policy refusal correlated to transaction ID |
+| UNO → ESP32 | EVENT | Reports authentication/fixture/transaction evidence |
+| ESP32 → UNO | REVOKE | Latches guardian authority revoked; does not self-clear |
+| ESP32 → UNO | STATUS | Guardian liveness/state observation only |
+| UNO → ESP32 | ACK | Diagnostic protocol observation; never grants authority |
 
-## Initial message semantics
+## Guardian policy
 
-| Type | Direction | Purpose | Authority effect |
-|---|---|---|---|
-| `HELLO` | Both | Version/session handshake | No permit |
-| `HEARTBEAT` | UNO → ESP32 | Liveness and reported controller state | Liveness only; not proof of integrity |
-| `STATE` | UNO → ESP32 | Report legal controller state and sequence | Evaluated against transition policy |
-| `EVENT` | UNO → ESP32 | Report a test event or service-state change | Evaluated with provenance and policy |
-| `ACK` | Receiver → sender | Acknowledge a valid frame/request | No permit |
-| `PERMIT` | ESP32 → UNO / desktop adapter | Short-lived permit observation for a request/session | Desktop must independently validate freshness and mode |
-| `REVOKE` | ESP32 → UNO / desktop adapter | Revoke the current test authority | Denies protected virtual dispense |
-| `RECOVER` | Operator-controlled flow | Begin explicit recovery after incident acknowledgement | Does not clear evidence or restore permit by itself |
+The guardian expects known ATM states: UNCOMMISSIONED, IDLE, PIN_PENDING, AUTHENTICATED, WITHDRAW_PENDING, LOCKED, GUARDIAN_LOCKED. It checks the allowed transition table and the reported authentication flag against the state. It rejects a withdrawal request unless state is WITHDRAW_PENDING, the authentication flag is reported true, the last validated heartbeat is fresh, the transaction identifier is syntactically valid and strictly increasing, and the amount is a positive multiple of ₹50. Controller-side and guardian-side policy limits both apply. The defaults are configurable through the respective local USB console and are held in RAM.
 
-## Receiver validation order
+On permit, the ESP32 records the transaction identifier/amount and expects a matching subsequent UNO commit event within a deadline. A mismatched or missing commit triggers REVOKE. The guardian independently counts reported PIN failures over a short window and can revoke at its configured threshold. Test fixtures are labelled SIMULATED; they do not constitute real compromise detection.
 
-1. Enforce maximum frame length and ASCII character set.
-2. Require exact version, field count and known message type.
-3. Validate bounded session and numeric fields without overflow.
-4. Verify CRC-16/CCITT-FALSE.
-5. Require expected session and strictly fresh sequence; reject duplicate, stale or skipped sequence according to the selected policy.
-6. Validate payload schema and legal controller state transition.
-7. Update evidence/heartbeat timestamps only after the full frame validates.
-8. Emit a normalized observation with provenance; the policy decides permit/revoke.
-9. The domain-owned dispenser gate checks the current protected-mode authority immediately before inventory mutation.
+## Uno ATM workflow
 
-Malformed input must not crash firmware or create a permit. Sequence wrap must be handled by starting a new session before ambiguity. Heartbeat age is measured locally by the receiver, not trusted from a sender-provided timestamp.
+Runtime operator setup creates up to four fictional demo accounts using ADD_ACCOUNT CARD_ID PIN START_BALANCE, and sets virtual cash counts using SET_CASH. Customer flow: CARD, PIN, then BALANCE or WITHDRAW. Three failed PIN attempts cause a temporary demo lockout; PIN entry and authenticated sessions time out; invalid amounts, insufficient balance, policy limits, unavailable denominations, missing guardian and stale/revoked state block withdrawals. All customer state is RAM-only and wiped on reset.
 
-## Authentication limitation
+## Known limitations
 
-The current boards have no trusted secure element in this project. CRC, session IDs, sequence counters and reported build IDs do not authenticate a sender against malicious firmware. Do not label this protocol cryptographic attestation. A future challenge-response design would need an explicit key-storage and compromise analysis; a secret stored in ordinary Uno flash is not a trustworthy hardware root.
-
-## Implementation status
-
-This document specifies the target contract. USB console observation is not equivalent to framed protocol validation. The current synthetic software fixture remains distinct from board-reported and protocol-validated evidence. Hardware-in-the-loop mode must stay unavailable until firmware, parser, freshness checks and fail-closed integration pass their tests.
+This protocol does not use HMAC, digital signatures, a protected shared secret, secure element, hardware identity, secure boot configured, or an independently trusted PIN-entry device. The Uno's PIN/result/state are reported by its own firmware. A compromised Uno can fabricate normal-looking state and events; a compromised ESP32 can issue incorrect decisions. CRC detects accidental corruption, not deliberate forgery. The firmware is not a physical dispenser interlock. No real account/PIN, real network, or physical cash may be connected. Production-grade ATM security requires a distinct hardware/key-management architecture and independent review.
