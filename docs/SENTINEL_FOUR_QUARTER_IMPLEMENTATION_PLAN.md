@@ -33,7 +33,7 @@
 - [x] Add serial-manager tests for fragmented/concatenated lines, CRLF, overlong/malformed input, unplug, write failure, double-connect, role/port collisions, stale readiness, structured command validation and sensitive-data redaction.
 - [x] Keep the software-only simulation usable offline and separate from protected HIL; connection alone never grants readiness.
 
-**Quarter 2 exit gate:** Automated verification must prove the main-process bridge accepts only structured allowlisted commands, protected commands are blocked without fresh paired readiness, framing/session failures invalidate readiness, and sensitive command/serial text does not reach diagnostics. The gate remains pending until the exact Quarter 2 commit passes CI.
+**Quarter 2 exit gate:** The main-process bridge accepts only structured allowlisted commands; protected commands are blocked without fresh paired readiness; framing/session failures invalidate readiness; and sensitive command/serial text is redacted before renderer diagnostics. These automated checks and the renderer build passed in [run 40372389614](https://github.com/Ady5545/Sentinel/actions/runs/40372389614). Physical paired-board behavior remains separately NOT VERIFIED.
 
 ## Quarter 3 — End-to-end HIL and research evidence (50–75%)
 
@@ -68,7 +68,7 @@
 | Quarter 1 overall | **IN PROGRESS** | Remaining protocol delivery, fault-model and full test gates above |
 | Quarter 2 host bridge/readiness | Implemented on this branch; CI pending | `electron/serial-manager.cjs`, `electron/main.cjs`, `electron/preload.cjs`, `src/vite-env.d.ts`, `src/App.tsx` |
 | Quarter 2 test coverage | Implemented on this branch; CI pending | `electron/serial-manager.node-test.cjs`, `src/core/hil-evidence.test.ts` |
-| Quarter 2 overall | **IN PROGRESS — awaiting exact-commit CI** | Implementation covers structured commands, typed/redacted events, paired readiness freshness, session invalidation, timeout, and bridge failure tests |
+| Quarter 2 overall | **IMPLEMENTED — automated CI PASS** | Desktop test/build workflow passed on implementation commit `36719db492c2d73551361871e37e6a5c403237b6` in [run 40372389614](https://github.com/Ady5545/Sentinel/actions/runs/40372389614). The final ledger-only update is rechecked by its own push workflow. |
 | Physical UART qualification | **NOT VERIFIED** | Requires actual Uno + ESP32 paired logs; code changes cannot establish it |
 
 Quarter 1's open audit remains explicitly tracked and must not be represented as complete. No Quarter 3 work should begin until Quarter 2's exit gate is satisfied and reviewed.
