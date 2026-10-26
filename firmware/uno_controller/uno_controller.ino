@@ -30,6 +30,8 @@ static const unsigned long HELLO_RETRY_MS = 650UL;
 static const unsigned long HANDSHAKE_TIMEOUT_MS = 8000UL;
 static const unsigned long DEFAULT_GUARDIAN_TIMEOUT_MS = 2600UL;
 static const unsigned long HEALTHY_STATUS_DUPLICATE_WINDOW_MS = 600UL;
+static const unsigned long COMMIT_REPORT_RETRY_MS = 250UL;
+static const uint8_t COMMIT_REPORT_MAX_ATTEMPTS = 3;
 static const uint8_t MAX_INITIAL_STATUS_FRAME_DROPS = 3;
 static const unsigned long DEFAULT_TRANSACTION_DECISION_TIMEOUT_MS = 1800UL;
 static const unsigned long DEFAULT_PIN_ENTRY_TIMEOUT_MS = 30000UL;
@@ -101,6 +103,15 @@ uint16_t txPendingPlan[4] = {0, 0, 0, 0};
 char txPendingId[12] = {0};
 uint32_t txCommittedCount = 0;
 uint32_t txDeniedCount = 0;
+bool txCommitAwaitingAck = false;
+uint32_t txCommitEventSequence = 0;
+uint32_t txCommitLastSentAt = 0;
+uint8_t txCommitAttempts = 0;
+char txCommitReportId[12] = {0};
+uint32_t txCommitReportAmount = 0;
+uint32_t lastGuardianCommitAckSequence = 0;
+uint32_t lastGuardianCommitAckAt = 0;
+char lastGuardianCommitAckPayload[48] = {0};
 
 char sessionId[13] = {0};
 char rxBuffer[FRAME_MAX];
@@ -400,6 +411,12 @@ void sendState() {
 void setAtmState(AtmState next) {
   if (atmState == next) return;
   atmState = next;
+  if (txCommitAwaitingAck) {
+    // Do not emit a later sequence while the guardian may still need the exact
+    // TX_COMMITTED frame. State publication resumes after its correlated ACK.
+    statePublished = false;
+    return;
+  }
   sendState();
 }
 
@@ -507,6 +524,16 @@ bool payloadIsIdAmountReason(const char *payload, uint32_t expectedAmount) {
   return strcmp(reason, "TX_LIMIT") == 0 || strcmp(reason, "WINDOW_LIMIT") == 0;
 }
 
+bool payloadIsCommitAck(const char *payload) {
+  if (!payload || !txCommitReportId[0] || txCommitEventSequence == 0) return false;
+  char expected[48];
+  const int n = snprintf_P(expected, sizeof(expected),
+      PSTR("ack_seq=%lu;id=%s;amount=%lu"),
+      (unsigned long)txCommitEventSequence, txCommitReportId,
+      (unsigned long)txCommitReportAmount);
+  return n > 0 && (size_t)n < sizeof(expected) && strcmp(payload, expected) == 0;
+}
+
 bool transactionIdMatches(const char *payload) {
   char id[12];
   return parsePayloadField(payload, F("id"), id, sizeof(id)) &&
@@ -560,9 +587,9 @@ void completeWithdrawal() {
     return;
   }
 
-  if (txCommittedCount == 0xFFFFFFFFUL ||
+  if (txCommittedCount == 0xFFFFFFFFUL || txSequence == 0xFFFFFFFFUL ||
       windowWithdrawn > windowLimit || txPendingAmount > windowLimit - windowWithdrawn) {
-    enterGuardianLock(F("Transaction counter or budget overflow guard triggered before commit."));
+    enterGuardianLock(F("Transaction counter, sequence or budget overflow guard triggered before commit."));
     return;
   }
 
@@ -580,16 +607,36 @@ void completeWithdrawal() {
            txPendingId, (unsigned long)txPendingAmount, (unsigned long)account.balance);
   emitEvent(F("WITHDRAWAL_APPROVED"), details);
   char commitPayload[48];
-  snprintf_P(commitPayload, sizeof(commitPayload), PSTR("event=TX_COMMITTED;id=%s;amount=%lu"),
-             txPendingId, (unsigned long)txPendingAmount);
-  if (!sendFrame(F("EVENT"), commitPayload)) {
-    Serial.println(F("[FAULT] TX_COMMITTED report was not queued; guardian lock remains fail-closed."));
+  const int commitLength = snprintf_P(commitPayload, sizeof(commitPayload),
+      PSTR("event=TX_COMMITTED;id=%s;amount=%lu"),
+      txPendingId, (unsigned long)txPendingAmount);
+  if (commitLength <= 0 || (size_t)commitLength >= sizeof(commitPayload)) {
     txPendingAmount = 0;
     txPendingId[0] = '\0';
     memset(txPendingPlan, 0, sizeof(txPendingPlan));
-    enterGuardianLock(F("Failed to report a committed virtual transaction to guardian."));
+    enterGuardianLock(F("Unable to allocate a valid TX_COMMITTED report."));
     return;
   }
+  strncpy(txCommitReportId, txPendingId, sizeof(txCommitReportId) - 1);
+  txCommitReportId[sizeof(txCommitReportId) - 1] = '\0';
+  txCommitReportAmount = txPendingAmount;
+  txCommitEventSequence = txSequence + 1UL;
+  txCommitAwaitingAck = true;
+  if (!sendFrameAtSequence(F("EVENT"), commitPayload, txCommitEventSequence)) {
+    txCommitAwaitingAck = false;
+    Serial.println(F("[FAULT] TX_COMMITTED report was not queued; controller remains fail-closed."));
+    txPendingAmount = 0;
+    txPendingId[0] = '\0';
+    memset(txPendingPlan, 0, sizeof(txPendingPlan));
+    enterGuardianLock(F("Failed to report committed virtual transaction to guardian."));
+    return;
+  }
+  txCommitAttempts = 1;
+  txCommitLastSentAt = millis();
+  Serial.print(F("[COMMIT_TX] Awaiting exact guardian ACK; event_seq="));
+  Serial.print(txCommitEventSequence);
+  Serial.print(F("; id="));
+  Serial.println(txCommitReportId);
   Serial.print(F("[VIRTUAL_ONLY] Withdrawal committed: "));
   Serial.print(txPendingAmount);
   Serial.print(F("; balance="));
@@ -670,6 +717,16 @@ void handleGuardianLine(char *line) {
     return;
   }
 
+  // Exact duplicate commit ACKs within a short window are idempotent and do
+  // not refresh link freshness or advance the receive sequence.
+  if (!guardianRevokeLatched && seq == lastGuardianCommitAckSequence &&
+      lastGuardianCommitAckSequence != 0 && STREQ(type, "ACK") &&
+      strcmp(payload, lastGuardianCommitAckPayload) == 0 &&
+      (uint32_t)(millis() - lastGuardianCommitAckAt) <= HEALTHY_STATUS_DUPLICATE_WINDOW_MS) {
+    Serial.println(F("[COMMIT_ACK] Exact duplicate ACK ignored."));
+    return;
+  }
+
   if (seq != lastGuardianSequence + 1UL) {
     Serial.print(F("[LINK_RX] Sequence mismatch; expected="));
     Serial.print(lastGuardianSequence + 1UL);
@@ -697,14 +754,26 @@ void handleGuardianLine(char *line) {
   }
 
   if (STREQ(type, "ACK")) {
-    if (!guardianHelloSeen || handshakeComplete ||
-        !STREQ(payload, "HELLO_ACCEPTED")) {
-      enterGuardianLock(F("Unexpected guardian ACK."));
+    if (!handshakeComplete && guardianHelloSeen && STREQ(payload, "HELLO_ACCEPTED")) {
+      handshakeComplete = true;
+      guardianLink = LINK_UNKNOWN;
+      Serial.println(F("[LINK] V3 handshake complete; waiting for fresh guardian status."));
       return;
     }
-    handshakeComplete = true;
-    guardianLink = LINK_UNKNOWN;
-    Serial.println(F("[LINK] V3 handshake complete; waiting for fresh guardian status."));
+    if (handshakeComplete && txCommitAwaitingAck && payloadIsCommitAck(payload)) {
+      lastGuardianCommitAckSequence = seq;
+      lastGuardianCommitAckAt = millis();
+      strncpy(lastGuardianCommitAckPayload, payload, sizeof(lastGuardianCommitAckPayload) - 1);
+      lastGuardianCommitAckPayload[sizeof(lastGuardianCommitAckPayload) - 1] = '\0';
+      txCommitAwaitingAck = false;
+      txCommitAttempts = 0;
+      Serial.print(F("[COMMIT_ACK] Exact guardian acknowledgement accepted for id="));
+      Serial.println(txCommitReportId);
+      statePublished = false;
+      sendState();
+      return;
+    }
+    enterGuardianLock(F("Unexpected, stale or transaction-mismatched guardian ACK."));
     return;
   }
 
@@ -1124,6 +1193,12 @@ void handleCommand(char *line) {
     return;
   }
   if (argc == 0) { secureClear(work, sizeof(work)); return; }
+  if (txCommitAwaitingAck && !STREQ(argv[0], "STATUS") &&
+      !STREQ(argv[0], "JOURNAL") && !STREQ(argv[0], "HELP")) {
+    Serial.println(F("[COMMIT_TX] Operator/customer command deferred until TX_COMMITTED is acknowledged."));
+    secureClear(work, sizeof(work));
+    return;
+  }
 
   if (STREQ(argv[0], "HELP")) {
     printHelp();
@@ -1260,7 +1335,7 @@ void loop() {
   }
 
   if (handshakeComplete && !statePublished) sendState();
-  if (handshakeComplete && !guardianRevokeLatched && !awaitingGuardianStatus &&
+  if (handshakeComplete && !guardianRevokeLatched && !txCommitAwaitingAck && !awaitingGuardianStatus &&
       (uint32_t)(now - lastHeartbeatAt) >= HEARTBEAT_MS)
     sendHeartbeat(now);
 
@@ -1275,11 +1350,36 @@ void loop() {
     emitEvent(F("PIN_TIMEOUT"), F("reason=entry_timeout"));
     resetCustomerSession();
   }
-  if (atmState == ATM_AUTHENTICATED &&
+  if (atmState == ATM_AUTHENTICATED && !txCommitAwaitingAck &&
       (uint32_t)(now - lastCustomerActivityAt) > sessionTimeoutMs) {
     emitEvent(F("SESSION_TIMEOUT"), F("reason=idle_timeout"));
     resetCustomerSession();
   }
+  if (txCommitAwaitingAck && !guardianRevokeLatched &&
+      (uint32_t)(now - txCommitLastSentAt) >= COMMIT_REPORT_RETRY_MS) {
+    if (txCommitAttempts >= COMMIT_REPORT_MAX_ATTEMPTS) {
+      txCommitAwaitingAck = false;
+      enterGuardianLock(F("TX_COMMITTED acknowledgement retry budget exhausted."));
+    } else {
+      char commitPayload[48];
+      const int n = snprintf_P(commitPayload, sizeof(commitPayload),
+          PSTR("event=TX_COMMITTED;id=%s;amount=%lu"),
+          txCommitReportId, (unsigned long)txCommitReportAmount);
+      if (n <= 0 || (size_t)n >= sizeof(commitPayload) ||
+          !sendFrameAtSequence(F("EVENT"), commitPayload, txCommitEventSequence)) {
+        txCommitAwaitingAck = false;
+        enterGuardianLock(F("Failed to retransmit identical TX_COMMITTED report."));
+      } else {
+        ++txCommitAttempts;
+        txCommitLastSentAt = now;
+        Serial.print(F("[COMMIT_TX] Retrying identical EVENT sequence="));
+        Serial.print(txCommitEventSequence);
+        Serial.print(F("; attempt="));
+        Serial.println(txCommitAttempts);
+      }
+    }
+  }
+
   if (atmState == ATM_WITHDRAW_PENDING &&
       (uint32_t)(now - txPendingStartedAt) > transactionDecisionTimeoutMs) {
     ++txDeniedCount;

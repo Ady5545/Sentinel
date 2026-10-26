@@ -85,6 +85,11 @@ char lastAtmState[22] = "UNKNOWN";
 char pendingPermitId[12] = {0};
 uint32_t committedTransactions = 0;
 uint32_t deniedTransactions = 0;
+uint32_t lastCommittedEventSequence = 0;
+uint32_t lastCommitAckSequence = 0;
+uint32_t lastCommitAmount = 0;
+char lastCommittedEventPayload[48] = {0};
+char lastCommitAckPayload[48] = {0};
 
 void secureClear(char *buffer, size_t length) {
   volatile char *p = buffer;
@@ -419,7 +424,7 @@ void handleHeartbeat(const char *payload, uint32_t heartbeatSequence) {
   }
 }
 
-void handleEvent(const char *payload) {
+void handleEvent(const char *payload, uint32_t frameSequence) {
   char eventName[24];
   char source[24];
   char id[12];
@@ -480,18 +485,52 @@ void handleEvent(const char *payload) {
       revoke("TX_COMMITTED did not match the one-shot guardian permit.");
       return;
     }
-    if (committedTransactions == 0xFFFFFFFFUL) {
-      revoke("Guardian commit counter exhausted; clean paired restart required.");
+    char canonicalCommit[48];
+    const int commitLength = snprintf(canonicalCommit, sizeof(canonicalCommit),
+        "event=TX_COMMITTED;id=%s;amount=%lu", id, (unsigned long)amount);
+    if (commitLength <= 0 || (size_t)commitLength >= sizeof(canonicalCommit) ||
+        strcmp(payload, canonicalCommit) != 0) {
+      revoke("TX_COMMITTED payload is not in canonical field order.");
       return;
     }
+    if (committedTransactions == 0xFFFFFFFFUL || txSequence == 0xFFFFFFFFUL) {
+      revoke("Guardian commit/sequence counter exhausted; clean paired restart required.");
+      return;
+    }
+    strncpy(lastCommittedEventPayload, canonicalCommit, sizeof(lastCommittedEventPayload) - 1);
+    lastCommittedEventPayload[sizeof(lastCommittedEventPayload) - 1] = '\0';
+    lastCommittedEventSequence = frameSequence;
+    lastCommitAmount = amount;
+
+    char ackPayload[48];
+    const int ackLength = snprintf(ackPayload, sizeof(ackPayload),
+        "ack_seq=%lu;id=%s;amount=%lu", (unsigned long)frameSequence,
+        id, (unsigned long)amount);
+    if (ackLength <= 0 || (size_t)ackLength >= sizeof(ackPayload)) {
+      revoke("TX_COMMITTED acknowledgement payload overflow.");
+      return;
+    }
+    lastCommitAckSequence = txSequence + 1UL;
+    strncpy(lastCommitAckPayload, ackPayload, sizeof(lastCommitAckPayload) - 1);
+    lastCommitAckPayload[sizeof(lastCommitAckPayload) - 1] = '\0';
+
     Serial.print(F("[RECONCILE] Matching controller-reported virtual commit id="));
-    Serial.print(pendingPermitId);
+    Serial.print(id);
     Serial.print(F(";amount="));
-    Serial.println(pendingPermitAmount);
+    Serial.println(amount);
+    ++committedTransactions;
     awaitingCommit = false;
     pendingPermitId[0] = '\0';
     pendingPermitAmount = 0;
-    ++committedTransactions;
+
+    if (!sendFrameAtSequence("ACK", lastCommitAckPayload, lastCommitAckSequence)) {
+      revoke("Unable to transmit TX_COMMITTED acknowledgement.");
+      return;
+    }
+    Serial.print(F("[COMMIT_ACK_TX] ACK sequence="));
+    Serial.print(lastCommitAckSequence);
+    Serial.print(F(" acknowledges UNO EVENT sequence="));
+    Serial.println(lastCommittedEventSequence);
     return;
   }
 
@@ -649,6 +688,19 @@ void handleUnoLine(char *line) {
     return;
   }
 
+  // A retry of the last committed event must be byte-identical and retain its
+  // original sequence. Reuse the exact ACK identity without recounting it.
+  if (strcmp(type, "EVENT") == 0 && lastCommittedEventSequence != 0 &&
+      seq == lastCommittedEventSequence && strcmp(payload, lastCommittedEventPayload) == 0) {
+    if (!lastCommitAckPayload[0] || lastCommitAckSequence == 0 ||
+        !sendFrameAtSequence("ACK", lastCommitAckPayload, lastCommitAckSequence)) {
+      revoke("Unable to replay the original TX_COMMITTED acknowledgement.");
+      return;
+    }
+    Serial.println(F("[COMMIT_ACK_TX] Replayed identical acknowledgement for duplicate commit report."));
+    return;
+  }
+
   // An identical initial HELLO is an idempotent retry only before the first
   // valid heartbeat. It never advances the receive sequence or repeats effects.
   if (strcmp(type, "HELLO") == 0 && seq == initialUnoHelloSequence &&
@@ -706,7 +758,7 @@ void handleUnoLine(char *line) {
   } else if (strcmp(type, "REQUEST") == 0) {
     handleRequest(payload);
   } else if (strcmp(type, "EVENT") == 0) {
-    handleEvent(payload);
+    handleEvent(payload, seq);
   } else {
     revoke("Unknown UNO message type.");
   }
