@@ -2,8 +2,8 @@
 
 **Created:** 26 October 2026  
 **Repository:** `Ady5545/Sentinel`  
-**Working branch:** `feat/implementation-quarter-1-2026-10-26`  
-**Rule:** Deliver the remaining work in four approximately equal 25% quarters. Each quarter must be reviewed and verified before the next begins. Existing implemented work is preserved; only audited gaps are changed.
+**Working branch:** `feat/implementation-quarter-2-2026-10-26`  
+**Rule:** Deliver the remaining work in four approximately equal 25% quarters. Existing implemented work is preserved; only audited gaps are changed. By explicit user direction, Quarter 2 began while Quarter 1's separate audit remains open; this does not mark Quarter 1 complete. Quarter 3 must not begin until Quarter 2's exit gate is verified.
 
 ## Quarter 1 — Authority and protocol reliability (0–25%)
 
@@ -25,13 +25,15 @@
 
 ## Quarter 2 — Host bridge and explicit readiness (25–50%)
 
-- Add a bounded, typed, allowlisted serial-write API in Electron main; do not expose arbitrary renderer IPC or raw serial writes.
-- Add typed board-event parsing and structured response correlation with redaction before renderer state/logging.
-- Implement device-role assignment, port ownership protection, connection/session/readiness states, reset invalidation and timeout/reconciliation states.
-- Add serial-manager tests for fragmented/concatenated lines, CRLF, overlong/malformed lines, unplug, write failure, double-connect and port-role collisions.
-- Keep the software-only simulation usable offline and separate from protected HIL; never silently fall back between modes.
+- [x] Replace renderer-to-main raw command strings with structured `{ name, args }` requests; the main process canonicalizes and validates each role-specific command before serial write.
+- [x] Add a narrow board-event parser for boot, link, HEALTHY/OBSERVING, revoke, ATM_EVENT, permit, denial and commit-reconciliation records; redact sensitive serial text in the main process before it reaches renderer state/logging.
+- [x] Add an explicit serial-readiness snapshot and a host-side 3.5-second freshness gate. Protected commands fail closed unless both assigned board roles are connected and report fresh HEALTHY/OBSERVING states.
+- [x] Preserve per-connection session IDs and port-role ownership. Reconnect, disconnect, write errors, malformed/overlong input and board boot records invalidate readiness and unresolved HIL transaction evidence.
+- [x] Add an 8-second HIL reconciliation timeout that moves unresolved transactions into a visible mismatch/reconciliation state without mutating desktop cash.
+- [x] Add serial-manager tests for fragmented/concatenated lines, CRLF, overlong/malformed input, unplug, write failure, double-connect, role/port collisions, stale readiness, structured command validation and sensitive-data redaction.
+- [x] Keep the software-only simulation usable offline and separate from protected HIL; connection alone never grants readiness.
 
-**Quarter 2 exit gate:** The desktop can safely observe and issue only documented commands, and connection alone never grants HIL readiness.
+**Quarter 2 exit gate:** Automated verification must prove the main-process bridge accepts only structured allowlisted commands, protected commands are blocked without fresh paired readiness, framing/session failures invalidate readiness, and sensitive command/serial text does not reach diagnostics. The gate remains pending until the exact Quarter 2 commit passes CI.
 
 ## Quarter 3 — End-to-end HIL and research evidence (50–75%)
 
@@ -64,6 +66,9 @@
 | Firmware commit retry/ACK source contract | Added on this branch; CI pending | `.github/protocol-v3-handshake-contract.mjs` — bounded retries, identical sequence and idempotent ACK replay |
 | Vitest discovery issue | Fixed on this branch; CI pending | `package.json` now scopes Vitest to `src`, avoiding Node-test files under `.agent` being treated as Vitest suites |
 | Quarter 1 overall | **IN PROGRESS** | Remaining protocol delivery, fault-model and full test gates above |
+| Quarter 2 host bridge/readiness | Implemented on this branch; CI pending | `electron/serial-manager.cjs`, `electron/main.cjs`, `electron/preload.cjs`, `src/vite-env.d.ts`, `src/App.tsx` |
+| Quarter 2 test coverage | Implemented on this branch; CI pending | `electron/serial-manager.node-test.cjs`, `src/core/hil-evidence.test.ts` |
+| Quarter 2 overall | **IN PROGRESS — awaiting exact-commit CI** | Implementation covers structured commands, typed/redacted events, paired readiness freshness, session invalidation, timeout, and bridge failure tests |
 | Physical UART qualification | **NOT VERIFIED** | Requires actual Uno + ESP32 paired logs; code changes cannot establish it |
 
-No later quarter should begin until Quarter 1's exit gate is satisfied and reviewed.
+Quarter 1's open audit remains explicitly tracked and must not be represented as complete. No Quarter 3 work should begin until Quarter 2's exit gate is satisfied and reviewed.
