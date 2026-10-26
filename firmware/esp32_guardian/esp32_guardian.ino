@@ -749,7 +749,16 @@ void handleUnoLine(char *line) {
     mode = GUARDIAN_NEGOTIATING;  // No observing/permit state before a valid heartbeat.
     Serial.println(F("[LINK] V3 handshake confirmed; waiting for first valid heartbeat."));
   } else if (!handshakeConfirmed) {
-    revoke("UNO sent state or transaction traffic before V3 handshake completion.");
+    // One-way demo fallback: accept only a typed EVENT before handshake, and
+    // let handleEvent validate its exact schema and SIMULATED source. This
+    // allows the controlled integrity fixture to be demonstrated when the
+    // ESP32->UNO return wire is unavailable; it never grants ATM authority.
+    if (strcmp(type, "EVENT") == 0) {
+      Serial.println(F("[TEST] Pre-handshake EVENT received; validating controlled fixture only."));
+      handleEvent(payload, seq);
+    } else {
+      revoke("UNO sent non-fixture traffic before V3 handshake completion.");
+    }
   } else if (strcmp(type, "STATE") == 0) {
     handleState(payload);
   } else if (strcmp(type, "HEARTBEAT") == 0) {
