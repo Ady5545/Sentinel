@@ -31,7 +31,7 @@ type HardwareAttackState = {
 };
 const initialHardwareAttack: HardwareAttackState = {
   phase: 'idle', startedAt: 0,
-  detail: 'Connect both boards and wait for fresh readiness before launching the controlled fixture.',
+  detail: 'Hardware evidence is optional. The ATM simulator runs in software-only mode; connect both boards only when you want a live hardware fixture.',
   unoEvidence: '', sentinelEvidence: '', controllerEvidence: ''
 };
 type UnoOperatorCommand =
@@ -689,8 +689,8 @@ function ExperimentView({ boards, pairReady, attackDemo, nowMs, onNavigate, onRu
     return board.phase;
   };
   return <>
-    <ScreenHeading number="04" eyebrow="JUDGE DEMO · LIVE HARDWARE EVIDENCE" title="Attack → detect → revoke" description="Start the controlled demo once. SENTINEL advances through the stages only when it receives matching evidence from the physical UNO and ESP32; no UI-only success is assumed." action={<span className={'decision-pill ' + (guardianRevoked ? 'danger' : pairReady ? 'safe' : '')}>{pairReady ? 'PAIRED HARDWARE READY' : guardianRevoked ? 'REVOCATION LATCHED' : 'PAIR NOT READY'}</span>} />
-    <section className={'hardware-demo-shell phase-' + attackDemo.phase + (pairReady ? ' pair-ready' : '') + (unoHit ? ' uno-compromised' : '') + (guardianRevoked ? ' guardian-revoked' : '')}>
+    <ScreenHeading number="04" eyebrow="JUDGE DEMO · SOFTWARE + HARDWARE" title="Attack → detect → revoke" description="The ATM simulator works without connected boards. Use the software scenario in ATM Terminal any time; this panel is reserved for evidence from real connected hardware." action={<span className={'decision-pill ' + (guardianRevoked ? 'danger' : pairReady ? 'safe' : '')}>{pairReady ? 'PAIRED HARDWARE READY' : guardianRevoked ? 'REVOCATION LATCHED' : 'HARDWARE EVIDENCE OPTIONAL'}</span>} />
+    {!pairReady && <section className="data-panel" aria-label="Software-only experiment mode"><div className="scenario-panel-heading"><div><span className="hardware-demo-eyebrow">SOFTWARE-ONLY MODE</span><h2>ATM simulator is ready without hardware</h2><p>Run normal virtual transactions and the controlled withdrawal scenario without connecting either board. Live board evidence is only needed for the separate hardware fixture below.</p></div><button className="scenario-deploy-button" onClick={() => onNavigate('terminal')}>Open ATM terminal <ArrowRight size={14} /></button></div></section>}\n    <section className={'hardware-demo-shell phase-' + attackDemo.phase + (pairReady ? ' pair-ready' : '') + (unoHit ? ' uno-compromised' : '') + (guardianRevoked ? ' guardian-revoked' : '')}>
       <div className="hardware-demo-topline">
         <div><span className="hardware-demo-eyebrow">SENTINEL · REAL SERIAL PATH</span><h2>{guardianRevoked ? 'Guardian intervention reported' : unoHit ? 'Integrity fixture detected on the controller path' : pairReady ? 'Both boards are reporting ready' : 'Connect the hardware pair to begin'}</h2></div>
         <span className={'hardware-phase-badge ' + (guardianRevoked ? 'is-danger' : unoHit ? 'is-warning' : pairReady ? 'is-ready' : '')}><i />{phaseLabel[attackDemo.phase]}</span>
