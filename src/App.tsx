@@ -66,7 +66,7 @@ function invalidateInFlightHilTransaction(current: HilTransaction | null, messag
 }
 
 export default function App() {
-  const [state, dispatch] = useReducer(atmReducer, undefined, () => initialAtmState('protected'));
+  const [state, dispatch] = useReducer(atmReducer, undefined, () => initialAtmState('baseline'));
   const [view, setView] = useState<View>('terminal');
   const [launcherOpen, setLauncherOpen] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
@@ -92,6 +92,12 @@ export default function App() {
     const handle = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(handle);
   }, []);
+
+  useEffect(() => {
+    if (!state.sequenceActive) return;
+    const handle = window.setInterval(() => dispatch({ type: 'AUTO_ATTACK_TICK' }), 950);
+    return () => window.clearInterval(handle);
+  }, [state.sequenceActive]);
 
   useEffect(() => {
     if (!['sending', 'awaiting-uno', 'fixture-injected', 'guardian-revoked'].includes(attackDemo.phase)) return;
@@ -567,15 +573,13 @@ function TerminalView({ state, dispatch, onNavigate }: { state: AtmState; dispat
   };
   const cancel = () => { setPinEntry(''); dispatch({ type: 'CANCEL_SESSION' }); };
   return <>
-    <ScreenHeading number="01" eyebrow="CUSTOMER ENVIRONMENT" title="ATM terminal" description="Customer-facing ATM emulator. For the live security demonstration, use Experiment Lab after both physical boards report fresh readiness." />
-    <section className="presentation-banner" aria-label="SENTINEL hardware demonstration">
-      <div className="presentation-banner-top"><span className="presentation-live"><i /> HARDWARE-LED DEMONSTRATION</span><span className="presentation-id">UNO + ESP32 · LOCAL</span></div>
-      <div className="presentation-banner-body">
-        <div className="presentation-copy"><div className="presentation-eyebrow">LIVE SERIAL EVIDENCE · CONTROLLED FIXTURE</div><h2>Watch the real boards respond.</h2><p>Connect the Arduino UNO and ESP32 in Hardware Bench. The lab unlocks the attack control only after both boards report fresh readiness, then animates each stage from their actual console events.</p>
-          <div className="presentation-steps"><span><b>01</b> Pair hardware</span><span><b>02</b> Inject test fixture</span><span><b>03</b> Observe revocation</span></div>
-        </div>
-        <button className="presentation-launch" onClick={() => onNavigate('experiments')}><span className="presentation-launch-icon"><ShieldCheck size={19} /></span><span><strong>Open live attack lab</strong><small>No scenario starts automatically</small></span><ArrowRight size={17} /></button>
-      </div>
+    <ScreenHeading number="01" eyebrow="CUSTOMER ENVIRONMENT" title="ATM terminal" description="Run the same controller-failure scenario twice: first with SENTINEL disabled, then reset and enable SENTINEL to compare the result." />
+    <section className="scenario-control-panel data-panel" aria-label="SENTINEL demonstration controls">
+      <div className="scenario-panel-heading"><div><span className="hardware-demo-eyebrow">JUDGE DEMO · SOFTWARE ATM SIMULATOR</span><h2>Controller compromise comparison</h2><p>All withdrawals here are virtual and run only inside the simulator. This panel does not send an attack command to the hardware boards.</p></div><span className={'scenario-mode-pill ' + (state.mode === 'protected' ? 'enabled' : 'disabled')}>{state.mode === 'protected' ? 'SENTINEL ON' : 'SENTINEL OFF'}</span></div>
+      <div className="scenario-mode-row"><span><small>ACTIVE COMPARISON MODE</small><strong>{state.mode === 'protected' ? 'Protected · authority enforced' : 'Baseline · no guardian enforcement'}</strong></span><span><small>CONTROLLER</small><strong className={state.controllerState === 'COMPROMISED' ? 'red-text' : 'green-text'}>{state.controllerState}</strong></span><span><small>AUTOMATIC WITHDRAWALS</small><strong>{state.sequenceCompleted} / 3</strong></span></div>
+      <div className="scenario-action-row"><button className="quiet-button" onClick={() => dispatch({ type: 'SET_MODE', mode: 'baseline' })}><RotateCcw size={14} /> Reset · SENTINEL OFF</button><button className="quiet-button" onClick={() => dispatch({ type: 'SET_MODE', mode: 'protected' })}><ShieldCheck size={14} /> Reset + enable SENTINEL</button><button className="scenario-deploy-button" onClick={() => dispatch({ type: 'RUN_COMPROMISE_SCENARIO' })} disabled={state.scenarioApplied || state.sequenceActive}><ShieldAlert size={15} /> Deploy controlled test fixture <ArrowRight size={14} /></button></div>
+      <div className="scenario-outcome" role="status"><span className={state.sequenceActive ? 'sequence-pulse' : ''} /><p>{state.sequenceActive ? 'SENTINEL is OFF: automatic virtual withdrawals are running.' : state.sentinelStatus === 'AUTHORITY REVOKED' ? 'SENTINEL blocked the sequence. No virtual cash was dispensed by this test.' : state.attackSequence || state.sequenceCompleted === 3 ? 'The baseline sequence has finished. Reset and enable SENTINEL to repeat the fixture.' : state.scenarioApplied ? 'The controlled test sequence has ended.' : 'Step 1: complete a normal virtual transaction. Step 2: deploy the controlled test fixture.'}</p></div>
+      <div className="scenario-panel-footer"><span><CircleAlert size={13} /> Software-only comparison · no physical cash · not a real firmware compromise</span><button className="screen-link" onClick={() => onNavigate('experiments')}>Open separate hardware evidence lab <ArrowRight size={13} /></button></div>
     </section>
     <div className="terminal-layout">
       <section className="terminal-hardware">
@@ -599,7 +603,7 @@ function TerminalView({ state, dispatch, onNavigate }: { state: AtmState; dispat
       </section>
       <aside className="terminal-side">
         <section className="data-panel"><PanelTitle icon={<WalletCards size={16} />} title="ACCOUNT LEDGER" suffix="SIM" /><div className="ledger-balance"><span>AVAILABLE BALANCE</span><strong>{money(state.accountBalance)}</strong><small>Account {state.accountId}</small></div><div className="ledger-row"><span>Virtual cash dispensed</span><strong>{money(state.dispensedTotal)}</strong></div><div className="ledger-row"><span>Cassette inventory</span><strong>{money(state.cassetteCash)}</strong></div></section>
-        <section className="data-panel"><PanelTitle icon={<ShieldCheck size={16} />} title="SECURITY AUTHORITY" /><div className="authority-row"><span>Primary controller</span><b className={state.controllerState === 'COMPROMISED' ? 'red-text' : 'green-text'}>{state.controllerState}</b></div><div className="authority-row"><span>SENTINEL</span><b className={state.sentinelStatus === 'AUTHORITY REVOKED' ? 'red-text' : 'green-text'}>{state.sentinelStatus}</b></div><div className="authority-row"><span>Last decision</span><b>{state.lastDecision}</b></div>{state.sentinelStatus === 'AUTHORITY REVOKED' && <div className="inline-warning"><ShieldAlert size={14} /> Protected gate is closed.</div>}</section>
+        <section className="data-panel"><PanelTitle icon={<ShieldCheck size={16} />} title="SECURITY AUTHORITY" /><div className="authority-row"><span>Primary controller</span><b className={state.controllerState === 'COMPROMISED' ? 'red-text' : 'green-text'}>{state.controllerState}</b></div><div className="authority-row"><span>SENTINEL</span><b className={state.mode === 'baseline' ? 'red-text' : state.sentinelStatus === 'AUTHORITY REVOKED' ? 'red-text' : 'green-text'}>{state.mode === 'baseline' ? 'OFF · BASELINE' : state.sentinelStatus}</b></div><div className="authority-row"><span>Last decision</span><b>{state.lastDecision}</b></div>{state.sentinelStatus === 'AUTHORITY REVOKED' && <div className="inline-warning"><ShieldAlert size={14} /> Protected gate is closed.</div>}</section>
         <section className="note-panel"><div><strong>Operator note</strong><p>Compare the same controller-failure fixture with and without Sentinel enforcement.</p><button onClick={() => setViewThroughEvent('experiments')}>Open experiment lab <ArrowRight size={13} /></button></div></section>
       </aside>
     </div>
