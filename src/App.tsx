@@ -564,9 +564,35 @@ function PanelTitle({ icon, title, suffix }: { icon: ReactNode; title: string; s
 
 function TerminalView({ state, dispatch, onNavigate }: { state: AtmState; dispatch: Dispatch<AtmAction>; onNavigate: (view: View) => void }) {
   const [pinEntry, setPinEntry] = useState('');
+  const [moneyMotion, setMoneyMotion] = useState<'withdrawal' | 'attack' | 'blocked' | null>(null);
+  const [motionAmount, setMotionAmount] = useState(0);
+  const previousBalance = useRef(state.accountBalance);
+  const previousDecision = useRef(state.sentinelStatus);
   useEffect(() => {
     if (state.screen !== 'pin') setPinEntry('');
   }, [state.screen]);
+  useEffect(() => {
+    const previous = previousBalance.current;
+    if (state.accountBalance < previous) {
+      const amount = previous - state.accountBalance;
+      setMotionAmount(amount);
+      setMoneyMotion(state.mode === 'baseline' && state.scenarioApplied ? 'attack' : 'withdrawal');
+      const timer = window.setTimeout(() => setMoneyMotion(null), 1500);
+      previousBalance.current = state.accountBalance;
+      return () => window.clearTimeout(timer);
+    }
+    previousBalance.current = state.accountBalance;
+  }, [state.accountBalance, state.mode, state.scenarioApplied]);
+  useEffect(() => {
+    if (state.sentinelStatus === 'AUTHORITY REVOKED' && previousDecision.current !== 'AUTHORITY REVOKED') {
+      setMoneyMotion('blocked');
+      setMotionAmount(0);
+      const timer = window.setTimeout(() => setMoneyMotion(null), 2100);
+      previousDecision.current = state.sentinelStatus;
+      return () => window.clearTimeout(timer);
+    }
+    previousDecision.current = state.sentinelStatus;
+  }, [state.sentinelStatus]);
   const enterPin = (digit: string) => {
     if (pinEntry.length >= 4) return;
     setPinEntry(previous => previous + digit);
@@ -607,7 +633,7 @@ function TerminalView({ state, dispatch, onNavigate }: { state: AtmState; dispat
         <p className="terminal-caption"><LockKeyhole size={13} /> Demo PIN: <strong>1234</strong> · Synthetic account only · PIN content is not retained in the journal.</p>
       </section>
       <aside className="terminal-side">
-        <section className="data-panel"><PanelTitle icon={<WalletCards size={16} />} title="ACCOUNT LEDGER" suffix="SIM" /><div className="ledger-balance"><span>AVAILABLE BALANCE</span><strong>{money(state.accountBalance)}</strong><small>Account {state.accountId}</small></div><div className="ledger-row"><span>Virtual cash dispensed</span><strong>{money(state.dispensedTotal)}</strong></div><div className="ledger-row"><span>Cassette inventory</span><strong>{money(state.cassetteCash)}</strong></div></section>
+        <section className="data-panel"><PanelTitle icon={<WalletCards size={16} />} title="ACCOUNT LEDGER" suffix="SIM" /><div className={'ledger-balance money-motion ' + (moneyMotion === 'attack' ? 'money-motion-attack' : moneyMotion === 'withdrawal' ? 'money-motion-withdrawal' : moneyMotion === 'blocked' ? 'money-motion-blocked' : '')}><span>AVAILABLE BALANCE</span><strong>{money(state.accountBalance)}</strong><small>Account {state.accountId}</small>{(moneyMotion === 'attack' || moneyMotion === 'withdrawal') && <div className={'money-flyby ' + (moneyMotion === 'attack' ? 'flyby-attack' : 'flyby-withdrawal')} key={state.accountBalance}><span>₹</span><b>−{money(motionAmount)}</b></div>}{moneyMotion === 'blocked' && <div className="money-blocked-stamp"><ShieldCheck size={17} /> BLOCKED · ₹0 LOST</div>}</div><div className="money-flow-visual" aria-label="Animated money flow from account to virtual dispenser"><div className="money-flow-node account-node"><WalletCards size={15} /><span>ACCOUNT</span></div><div className={'money-flow-lane ' + (moneyMotion === 'attack' ? 'lane-attack' : moneyMotion === 'withdrawal' ? 'lane-withdrawal' : moneyMotion === 'blocked' ? 'lane-blocked' : '')}><i /><i /><i /><span>{moneyMotion === 'blocked' ? 'GATE CLOSED' : moneyMotion === 'attack' ? 'UNAUTHORISED FLOW' : moneyMotion === 'withdrawal' ? 'DISPENSING' : 'WAITING FOR TRANSACTION'}</span></div><div className="money-flow-node dispenser-node"><Banknote size={15} /><span>DISPENSER</span></div></div><div className="ledger-row"><span>Virtual cash dispensed</span><strong className={moneyMotion === 'attack' ? 'red-text' : moneyMotion === 'withdrawal' ? 'money-count-in' : ''}>{money(state.dispensedTotal)}</strong></div><div className="ledger-row"><span>Cassette inventory</span><strong>{money(state.cassetteCash)}</strong></div>{state.lastTransaction?.type === 'withdrawal' && <div className="last-money-event"><span>{state.lastTransaction.result === 'completed' ? 'LATEST WITHDRAWAL' : 'LATEST REQUEST'}</span><strong>{state.lastTransaction.result === 'completed' ? '−' : ''}{money(state.lastTransaction.amount)}</strong><small>{state.lastTransaction.result === 'completed' ? 'Virtual cash dispensed successfully' : 'Transaction not completed'}</small></div>}</section>
         <section className="data-panel"><PanelTitle icon={<ShieldCheck size={16} />} title="SECURITY AUTHORITY" /><div className="authority-row"><span>Primary controller</span><b className={state.controllerState === 'COMPROMISED' ? 'red-text' : 'green-text'}>{state.controllerState}</b></div><div className="authority-row"><span>SENTINEL</span><b className={state.mode === 'baseline' ? 'red-text' : state.sentinelStatus === 'AUTHORITY REVOKED' ? 'red-text' : 'green-text'}>{state.mode === 'baseline' ? 'OFF · BASELINE' : state.sentinelStatus}</b></div><div className="authority-row"><span>Last decision</span><b>{state.lastDecision}</b></div>{state.sentinelStatus === 'AUTHORITY REVOKED' && <div className="inline-warning"><ShieldAlert size={14} /> Protected gate is closed.</div>}</section>
         <section className="note-panel"><div><strong>Operator note</strong><p>Compare the same controller-failure fixture with and without Sentinel enforcement.</p><button onClick={() => setViewThroughEvent('experiments')}>Open experiment lab <ArrowRight size={13} /></button></div></section>
       </aside>
