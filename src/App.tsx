@@ -95,9 +95,14 @@ export default function App() {
 
   useEffect(() => {
     if (!state.sequenceActive) return;
-    const handle = window.setInterval(() => dispatch({ type: 'AUTO_ATTACK_TICK' }), 950);
-    return () => window.clearInterval(handle);
-  }, [state.sequenceActive]);
+    // Keep the attack clearly simulated but non-deterministic: wait 1–5 seconds
+    // and select a fresh virtual amount for each attempt.
+    const delayMs = 1000 + Math.floor(Math.random() * 4001);
+    const amounts = [500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000];
+    const amount = amounts[Math.floor(Math.random() * amounts.length)];
+    const handle = window.setTimeout(() => dispatch({ type: 'AUTO_ATTACK_TICK', amount }), delayMs);
+    return () => window.clearTimeout(handle);
+  }, [state.sequenceActive, state.sequenceCompleted]);
 
   useEffect(() => {
     if (!['sending', 'awaiting-uno', 'fixture-injected', 'guardian-revoked'].includes(attackDemo.phase)) return;
@@ -578,7 +583,7 @@ function TerminalView({ state, dispatch, onNavigate }: { state: AtmState; dispat
       <div className="scenario-panel-heading"><div><span className="hardware-demo-eyebrow">JUDGE DEMO · SOFTWARE ATM SIMULATOR</span><h2>Controller compromise comparison</h2><p>All withdrawals here are virtual and run only inside the simulator. This panel does not send an attack command to the hardware boards.</p></div><span className={'scenario-mode-pill ' + (state.mode === 'protected' ? 'enabled' : 'disabled')}>{state.mode === 'protected' ? 'SENTINEL ON' : 'SENTINEL OFF'}</span></div>
       <div className="scenario-mode-row"><span><small>ACTIVE COMPARISON MODE</small><strong>{state.mode === 'protected' ? 'Protected · authority enforced' : 'Baseline · no guardian enforcement'}</strong></span><span><small>CONTROLLER</small><strong className={state.controllerState === 'COMPROMISED' ? 'red-text' : 'green-text'}>{state.controllerState}</strong></span><span><small>AUTOMATIC WITHDRAWALS</small><strong>{state.sequenceCompleted} / 3</strong></span></div>
       <div className="scenario-action-row"><button className="quiet-button" onClick={() => dispatch({ type: 'SET_MODE', mode: 'baseline' })}><RotateCcw size={14} /> Reset · SENTINEL OFF</button><button className="quiet-button" onClick={() => dispatch({ type: 'SET_MODE', mode: 'protected' })}><ShieldCheck size={14} /> Reset + enable SENTINEL</button><button className="scenario-deploy-button" onClick={() => dispatch({ type: 'RUN_COMPROMISE_SCENARIO' })} disabled={state.scenarioApplied || state.sequenceActive}><ShieldAlert size={15} /> Deploy controlled test fixture <ArrowRight size={14} /></button></div>
-      <div className="scenario-outcome" role="status"><span className={state.sequenceActive ? 'sequence-pulse' : ''} /><p>{state.sequenceActive ? 'SENTINEL is OFF: automatic virtual withdrawals are running.' : state.sentinelStatus === 'AUTHORITY REVOKED' ? 'SENTINEL blocked the sequence. No virtual cash was dispensed by this test.' : state.mode === 'baseline' && state.sequenceCompleted === 3 ? 'The baseline sequence has finished. Reset and enable SENTINEL to repeat the fixture.' : state.scenarioApplied ? 'The controlled test sequence has ended.' : 'Step 1: complete a normal virtual transaction. Step 2: deploy the controlled test fixture.'}</p></div>
+      <div className="scenario-outcome" role="status"><span className={state.sequenceActive ? 'sequence-pulse' : ''} /><p>{state.sequenceActive ? 'SENTINEL is OFF: automatic virtual withdrawals are running at random 1–5 second intervals, with random amounts from ₹500 to ₹5,000.' : state.sentinelStatus === 'AUTHORITY REVOKED' ? 'SENTINEL blocked the sequence. No virtual cash was dispensed by this test.' : state.mode === 'baseline' && state.sequenceCompleted === 3 ? 'The baseline sequence has finished. Reset and enable SENTINEL to repeat the fixture.' : state.scenarioApplied ? 'The controlled test sequence has ended.' : 'Step 1: complete a normal virtual transaction. Step 2: deploy the controlled test fixture.'}</p></div>
       <div className="scenario-panel-footer"><span><CircleAlert size={13} /> Software-only comparison · no physical cash · not a real firmware compromise</span><button className="screen-link" onClick={() => onNavigate('experiments')}>Open separate hardware evidence lab <ArrowRight size={13} /></button></div>
     </section>
     <div className="terminal-layout">
@@ -702,8 +707,8 @@ function ExperimentView({ state, dispatch, boards, pairReady, attackDemo, nowMs,
       </div>
       <div className="software-mode-row">
         <span>Choose comparison</span>
-        <button className={state.mode === 'baseline' ? 'scenario-deploy-button mode-selected' : 'scenario-deploy-button'} onClick={() => dispatch({ type: 'SET_MODE', mode: 'baseline' })} disabled={state.scenarioApplied || state.sequenceActive}>SENTINEL OFF · baseline</button>
-        <button className={state.mode === 'protected' ? 'scenario-deploy-button mode-selected' : 'scenario-deploy-button'} onClick={() => dispatch({ type: 'SET_MODE', mode: 'protected' })} disabled={state.scenarioApplied || state.sequenceActive}>SENTINEL ON · protected</button>
+        <button className={state.mode === 'baseline' ? 'scenario-deploy-button mode-selected' : 'scenario-deploy-button'} onClick={() => dispatch({ type: 'SET_MODE', mode: 'baseline' })}>Reset · SENTINEL OFF</button>
+        <button className={state.mode === 'protected' ? 'scenario-deploy-button mode-selected' : 'scenario-deploy-button'} onClick={() => dispatch({ type: 'SET_MODE', mode: 'protected' })}>Reset + enable SENTINEL</button>
         <button className="hardware-attack-button software-attack-button" onClick={() => dispatch({ type: 'RUN_COMPROMISE_SCENARIO' })} disabled={state.scenarioApplied || state.sequenceActive}><ShieldAlert size={17} /><span><strong>{state.scenarioApplied ? 'Scenario deployed' : 'Deploy simulated controller compromise'}</strong><small>{state.scenarioApplied ? 'Reset the demo to run another comparison.' : 'Runs immediately in software; no serial ports or boards are checked.'}</small></span><ArrowRight size={16} /></button>
       </div>
       <div className="software-stage-grid">
@@ -711,9 +716,10 @@ function ExperimentView({ state, dispatch, boards, pairReady, attackDemo, nowMs,
         <article className={state.findings.length ? 'software-stage complete' : 'software-stage'}><span>02</span><strong>SENTINEL analysis</strong><small>{state.findings.length ? state.findings.length + ' POLICY FINDINGS' : state.mode === 'baseline' ? 'GUARDIAN DISABLED FOR COMPARISON' : 'AWAITING FIXTURE'}</small></article>
         <article className={state.sentinelStatus === 'AUTHORITY REVOKED' ? 'software-stage blocked' : state.sequenceCompleted > 0 ? 'software-stage complete' : 'software-stage'}><span>03</span><strong>Virtual dispenser gate</strong><small>{state.sentinelStatus === 'AUTHORITY REVOKED' ? 'AUTHORITY REVOKED · DISPENSE BLOCKED' : state.sequenceCompleted > 0 ? state.sequenceCompleted + ' UNPROTECTED WITHDRAWALS COMPLETED' : state.scenarioApplied ? 'NO AUTOMATED WITHDRAWAL COMPLETED YET' : 'WAITING FOR SCENARIO'}</small></article>
       </div>
-      <div className="authority-row"><span>Software run outcome</span><b className={state.sentinelStatus === 'AUTHORITY REVOKED' ? 'red-text' : state.sequenceCompleted > 0 ? 'red-text' : state.scenarioApplied ? 'green-text' : ''}>{state.sentinelStatus === 'AUTHORITY REVOKED' ? 'PROTECTED WITHDRAWAL BLOCKED' : state.sequenceCompleted > 0 ? state.sequenceCompleted + ' VIRTUAL WITHDRAWALS RELEASED · SENTINEL OFF' : state.scenarioApplied ? 'FIXTURE APPLIED · SIMULATION RUNNING' : 'READY · SOFTWARE-ONLY'}</b></div>
-      <p className="muted-note">For the clearest judge comparison: select SENTINEL OFF, deploy the fixture and watch the three automatic virtual withdrawals; reset, select SENTINEL ON, deploy again and observe immediate authority revocation with no balance or cassette deduction. The app labels both runs as software simulation.</p>
-    </section>\n    <section className={'hardware-demo-shell phase-' + attackDemo.phase + (pairReady ? ' pair-ready' : '') + (unoHit ? ' uno-compromised' : '') + (guardianRevoked ? ' guardian-revoked' : '')}>
+      <div className="authority-row"><span>Software run outcome</span><b className={state.sentinelStatus === 'AUTHORITY REVOKED' ? 'red-text' : state.sequenceCompleted > 0 ? 'red-text' : state.scenarioApplied ? 'green-text' : ''}>{state.sentinelStatus === 'AUTHORITY REVOKED' ? 'PROTECTED WITHDRAWAL BLOCKED · ₹0 LOST' : state.sequenceCompleted > 0 ? state.sequenceCompleted + ' VIRTUAL WITHDRAWALS RELEASED · SENTINEL OFF' : state.scenarioApplied ? 'FIXTURE APPLIED · SIMULATION RUNNING' : 'READY · SOFTWARE-ONLY'}</b></div>
+      <p className="muted-note">For the clearest judge comparison: select SENTINEL OFF, deploy the fixture and watch three automatic withdrawals with random 1–5 second delays and random ₹500–₹5,000 amounts; click Reset + enable SENTINEL, deploy again and observe immediate authority revocation with ₹0 lost and no balance or cassette deduction. The app labels both runs as software simulation.</p>
+    </section>
+    <section className={'hardware-demo-shell phase-' + attackDemo.phase + (pairReady ? ' pair-ready' : '') + (unoHit ? ' uno-compromised' : '') + (guardianRevoked ? ' guardian-revoked' : '')}>
       <div className="hardware-demo-topline">
         <div><span className="hardware-demo-eyebrow">SENTINEL · REAL SERIAL PATH</span><h2>{guardianRevoked ? 'Guardian intervention reported' : unoHit ? 'Integrity fixture detected on the controller path' : pairReady ? 'Both boards are reporting ready' : 'Connect the hardware pair to begin'}</h2></div>
         <span className={'hardware-phase-badge ' + (guardianRevoked ? 'is-danger' : unoHit ? 'is-warning' : pairReady ? 'is-ready' : '')}><i />{phaseLabel[attackDemo.phase]}</span>

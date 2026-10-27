@@ -187,7 +187,7 @@ describe('virtual dispenser authority boundary', () => {
     expect(final.dispensedTotal).toBe(initial.dispensedTotal);
     expect(final.accountBalance).toBe(initial.accountBalance);
   });
-  it('runs three automatic virtual withdrawals only in the SENTINEL-off baseline', () => {
+  it('runs three automatic virtual withdrawals with per-attempt amounts only in the SENTINEL-off baseline', () => {
     const initial = initialAtmState('baseline');
     let final = atmReducer(initial, { type: 'RUN_COMPROMISE_SCENARIO' });
     expect(final.sentinelStatus).toBe('MONITORING');
@@ -196,13 +196,24 @@ describe('virtual dispenser authority boundary', () => {
     expect(final.sequenceCompleted).toBe(0);
     expect(final.accountBalance).toBe(initial.accountBalance);
     expect(final.cassetteCash).toBe(initial.cassetteCash);
-    for (let i = 0; i < 3; i++) final = atmReducer(final, { type: 'AUTO_ATTACK_TICK' });
+    for (const amount of [1500, 2500, 1000]) {
+      final = atmReducer(final, { type: 'AUTO_ATTACK_TICK', amount });
+    }
     expect(final.sequenceActive).toBe(false);
     expect(final.sequenceCompleted).toBe(3);
     expect(final.transactions).toHaveLength(3);
-    expect(final.accountBalance).toBe(initial.accountBalance - 6000);
-    expect(final.cassetteCash).toBe(initial.cassetteCash - 6000);
-    expect(final.dispensedTotal).toBe(6000);
+    expect(final.transactions.map(transaction => transaction.amount)).toEqual([1500, 2500, 1000]);
+    expect(final.accountBalance).toBe(initial.accountBalance - 5000);
+    expect(final.cassetteCash).toBe(initial.cassetteCash - 5000);
+    expect(final.dispensedTotal).toBe(5000);
+  });
+  it('ignores an invalid automatic attack amount without changing the ledger', () => {
+    const initial = atmReducer(initialAtmState('baseline'), { type: 'RUN_COMPROMISE_SCENARIO' });
+    const unchanged = atmReducer(initial, { type: 'AUTO_ATTACK_TICK', amount: 1234 });
+    expect(unchanged).toBe(initial);
+    expect(unchanged.sequenceCompleted).toBe(0);
+    expect(unchanged.accountBalance).toBe(25000);
+    expect(unchanged.cassetteCash).toBe(50000);
   });
   it('blocks the same controlled fixture when SENTINEL is enabled', () => {
     const initial = initialAtmState('protected');
