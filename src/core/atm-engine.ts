@@ -90,12 +90,13 @@ export type AtmAction =
   | { type: 'RETURN_TO_MENU' }
   | { type: 'CANCEL_SESSION' }
   | { type: 'RUN_COMPROMISE_SCENARIO' }
-  | { type: 'AUTO_ATTACK_TICK' }
+  | { type: 'AUTO_ATTACK_TICK'; amount?: number }
   | { type: 'RESET_SCENARIO' };
 
 const START_BALANCE = 25000;
 const START_CASSETTE_CASH = 50000;
 const TEST_UNAUTHORIZED_AMOUNT = 2000;
+const ATTACK_AMOUNT_OPTIONS: number[] = [500, 1000, 1500, 2000, 2500, 3000, 4000, 5000];
 const VALID_DEMO_PIN = '1234';
 const SIMULATION_PERMIT_TTL_MS = 10_000;
 const timeLabel = () => new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
@@ -297,7 +298,7 @@ export function atmReducer(state: AtmState, action: AtmAction): AtmState {
       const findings = assessControllerEvidence(evidence);
       if (state.mode === 'baseline') {
         return updateWithEvent(state, 'critical', 'UNO', 'Controlled test fixture deployed',
-          'SOFTWARE SIMULATION ONLY: SENTINEL is OFF. The controller model is marked compromised and a sequence of three timed ₹2,000 virtual withdrawals starts automatically.',
+          'SOFTWARE SIMULATION ONLY: SENTINEL is OFF. The controller model is marked compromised; three automatic virtual withdrawals will use independent random delays of 1–5 seconds and random amounts from ₹500 to ₹5,000 in ₹500 increments.',
           { controllerState: 'COMPROMISED', scenarioApplied: true, sequenceActive: true, sequenceCompleted: 0, pendingWithdrawal: null, simulationPermit: null });
       }
       const compromised = updateWithEvent(state, 'critical', 'UNO', 'Controlled test fixture deployed',
@@ -307,12 +308,13 @@ export function atmReducer(state: AtmState, action: AtmAction): AtmState {
         findings.join(' ') || 'The protected policy revoked controller authority.',
         { sentinelStatus: 'AUTHORITY REVOKED', lastDecision: 'REVOKE', findings, screen: 'lockdown', pendingWithdrawal: null, simulationPermit: null });
       return updateWithEvent(revoked, 'success', 'DISPENSER', 'Automatic virtual withdrawals blocked',
-        'The same test fixture was stopped before any automated withdrawal. Account balance, cassette inventory, and dispensed total remain unchanged.');
+        'SENTINEL revoked controller authority before the first automated withdrawal. ₹0 was taken; account balance, cassette inventory, and dispensed total remain unchanged.');
     }
     case 'AUTO_ATTACK_TICK': {
       if (state.mode !== 'baseline' || !state.sequenceActive || !state.scenarioApplied ||
           state.controllerState !== 'COMPROMISED' || state.sentinelStatus === 'AUTHORITY REVOKED') return state;
-      const amount = TEST_UNAUTHORIZED_AMOUNT;
+      if (action.amount !== undefined && !ATTACK_AMOUNT_OPTIONS.includes(action.amount)) return state;
+      const amount = action.amount ?? TEST_UNAUTHORIZED_AMOUNT;
       const target = 3;
       if (state.sequenceCompleted >= target) return { ...state, sequenceActive: false };
       if (amount > state.accountBalance || amount > state.cassetteCash) {
