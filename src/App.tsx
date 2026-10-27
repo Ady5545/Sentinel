@@ -530,7 +530,7 @@ export default function App() {
         {view === 'terminal' && <TerminalView state={state} dispatch={dispatch} onNavigate={navigateTo} />}
         {view === 'machine' && <MachineView state={state} boards={boards} />}
         {view === 'sentinel' && <SentinelView state={state} boards={boards} />}
-        {view === 'experiments' && <ExperimentView boards={boards} pairReady={pairedHardwareReady} attackDemo={attackDemo} nowMs={nowMs} onNavigate={navigateTo} onRunAttack={runHardwareAttack} researchMode={researchRun.mode} researchPhase={researchRun.phase} serialEvents={serialEvents} />}
+        {view === 'experiments' && <ExperimentView state={state} dispatch={dispatch} boards={boards} pairReady={pairedHardwareReady} attackDemo={attackDemo} nowMs={nowMs} onNavigate={navigateTo} onRunAttack={runHardwareAttack} researchMode={researchRun.mode} researchPhase={researchRun.phase} serialEvents={serialEvents} />}
         {view === 'journal' && <JournalView events={combinedJournalEvents} alerts={alerts} onExport={exportEvidence} researchRun={researchRun} />}
         {view === 'hardware' && <HardwareView ports={ports} chosenPort={chosenPort} setChosenPort={setChosenPort} boards={boards} message={portMessage} serialEvents={serialEvents} refresh={refreshPorts} connect={connectBoard} disconnect={disconnectBoard} sendCommand={sendBoardCommand} sendTypedCommand={sendHilUnoCommand} researchMode={researchRun.mode} researchPhase={researchRun.phase} hilShadow={hilShadow} hilTransaction={hilTransaction} boardBootEpochs={boardBootEpochs} hilFaultResetBaseline={hilFaultResetBaseline} nowMs={nowMs} clearHilTransaction={() => { setHilTransaction(null); setHilTransactionStartedAt(null); setHilFaultResetBaseline(null); }} />}
         <footer className="status-footer"><span><i /> DOMAIN CORE ACTIVE</span><span>{eventCount.toString().padStart(3,'0')} EVENTS · {alerts.toString().padStart(2,'0')} ALERTS</span><span>OFFLINE ATM SIMULATOR · SECURITY RESEARCH ENVIRONMENT</span></footer>
@@ -649,7 +649,9 @@ function SentinelView({ state, boards }: { state: AtmState; boards: Record<Devic
   </>;
 }
 
-function ExperimentView({ boards, pairReady, attackDemo, nowMs, onNavigate, onRunAttack, researchMode, researchPhase, serialEvents }: {
+function ExperimentView({ state, dispatch, boards, pairReady, attackDemo, nowMs, onNavigate, onRunAttack, researchMode, researchPhase, serialEvents }: {
+  state: AtmState;
+  dispatch: Dispatch<AtmAction>;
   boards: Record<DeviceKey, BoardState>;
   pairReady: boolean;
   attackDemo: HardwareAttackState;
@@ -690,7 +692,28 @@ function ExperimentView({ boards, pairReady, attackDemo, nowMs, onNavigate, onRu
   };
   return <>
     <ScreenHeading number="04" eyebrow="JUDGE DEMO · SOFTWARE + HARDWARE" title="Attack → detect → revoke" description="The ATM simulator works without connected boards. Use the software scenario in ATM Terminal any time; this panel is reserved for evidence from real connected hardware." action={<span className={'decision-pill ' + (guardianRevoked ? 'danger' : pairReady ? 'safe' : '')}>{pairReady ? 'PAIRED HARDWARE READY' : guardianRevoked ? 'REVOCATION LATCHED' : 'HARDWARE EVIDENCE OPTIONAL'}</span>} />
-    {!pairReady && <section className="data-panel" aria-label="Software-only experiment mode"><div className="scenario-panel-heading"><div><span className="hardware-demo-eyebrow">SOFTWARE-ONLY MODE</span><h2>ATM simulator is ready without hardware</h2><p>Run normal virtual transactions and the controlled withdrawal scenario without connecting either board. Live board evidence is only needed for the separate hardware fixture below.</p></div><button className="scenario-deploy-button" onClick={() => onNavigate('terminal')}>Open ATM terminal <ArrowRight size={14} /></button></div></section>}\n    <section className={'hardware-demo-shell phase-' + attackDemo.phase + (pairReady ? ' pair-ready' : '') + (unoHit ? ' uno-compromised' : '') + (guardianRevoked ? ' guardian-revoked' : '')}>
+    <section className="data-panel software-demo-panel" aria-label="Software-only judge demonstration">
+      <div className="scenario-panel-heading">
+        <div><span className="hardware-demo-eyebrow">SOFTWARE-ONLY JUDGE DEMO · NO HARDWARE REQUIRED</span><h2>Run the complete attack → detect → block scenario</h2><p>All stages run in the local ATM model. This is explicitly simulated evidence, not a claim that physical boards responded. Normal ATM transactions are available separately in ATM Terminal.</p></div>
+        <div className="software-demo-actions">
+          <button className="scenario-deploy-button" onClick={() => dispatch({ type: 'RESET_SCENARIO' })}><RotateCcw size={14} /> Reset demo</button>
+          <button className="scenario-deploy-button" onClick={() => onNavigate('terminal')}>Open ATM terminal <ArrowRight size={14} /></button>
+        </div>
+      </div>
+      <div className="software-mode-row">
+        <span>Choose comparison</span>
+        <button className={state.mode === 'baseline' ? 'scenario-deploy-button mode-selected' : 'scenario-deploy-button'} onClick={() => dispatch({ type: 'SET_MODE', mode: 'baseline' })} disabled={state.scenarioApplied || state.sequenceActive}>SENTINEL OFF · baseline</button>
+        <button className={state.mode === 'protected' ? 'scenario-deploy-button mode-selected' : 'scenario-deploy-button'} onClick={() => dispatch({ type: 'SET_MODE', mode: 'protected' })} disabled={state.scenarioApplied || state.sequenceActive}>SENTINEL ON · protected</button>
+        <button className="hardware-attack-button software-attack-button" onClick={() => dispatch({ type: 'RUN_COMPROMISE_SCENARIO' })} disabled={state.scenarioApplied || state.sequenceActive}><ShieldAlert size={17} /><span><strong>{state.scenarioApplied ? 'Scenario deployed' : 'Deploy simulated controller compromise'}</strong><small>{state.scenarioApplied ? 'Reset the demo to run another comparison.' : 'Runs immediately in software; no serial ports or boards are checked.'}</small></span><ArrowRight size={16} /></button>
+      </div>
+      <div className="software-stage-grid">
+        <article className={state.scenarioApplied ? 'software-stage complete' : 'software-stage'}><span>01</span><strong>Controller fixture</strong><small>{state.scenarioApplied ? 'SIMULATED COMPROMISE DEPLOYED' : 'WAITING FOR OPERATOR'}</small></article>
+        <article className={state.findings.length ? 'software-stage complete' : 'software-stage'}><span>02</span><strong>SENTINEL analysis</strong><small>{state.findings.length ? state.findings.length + ' POLICY FINDINGS' : state.mode === 'baseline' ? 'GUARDIAN DISABLED FOR COMPARISON' : 'AWAITING FIXTURE'}</small></article>
+        <article className={state.sentinelStatus === 'AUTHORITY REVOKED' ? 'software-stage blocked' : state.sequenceCompleted > 0 ? 'software-stage complete' : 'software-stage'}><span>03</span><strong>Virtual dispenser gate</strong><small>{state.sentinelStatus === 'AUTHORITY REVOKED' ? 'AUTHORITY REVOKED · DISPENSE BLOCKED' : state.sequenceCompleted > 0 ? state.sequenceCompleted + ' UNPROTECTED WITHDRAWALS COMPLETED' : state.scenarioApplied ? 'NO AUTOMATED WITHDRAWAL COMPLETED YET' : 'WAITING FOR SCENARIO'}</small></article>
+      </div>
+      <div className="authority-row"><span>Software run outcome</span><b className={state.sentinelStatus === 'AUTHORITY REVOKED' ? 'red-text' : state.sequenceCompleted > 0 ? 'red-text' : state.scenarioApplied ? 'green-text' : ''}>{state.sentinelStatus === 'AUTHORITY REVOKED' ? 'PROTECTED WITHDRAWAL BLOCKED' : state.sequenceCompleted > 0 ? state.sequenceCompleted + ' VIRTUAL WITHDRAWALS RELEASED · SENTINEL OFF' : state.scenarioApplied ? 'FIXTURE APPLIED · SIMULATION RUNNING' : 'READY · SOFTWARE-ONLY'}</b></div>
+      <p className="muted-note">For the clearest judge comparison: select SENTINEL OFF, deploy the fixture and watch the three automatic virtual withdrawals; reset, select SENTINEL ON, deploy again and observe immediate authority revocation with no balance or cassette deduction. The app labels both runs as software simulation.</p>
+    </section>\n    <section className={'hardware-demo-shell phase-' + attackDemo.phase + (pairReady ? ' pair-ready' : '') + (unoHit ? ' uno-compromised' : '') + (guardianRevoked ? ' guardian-revoked' : '')}>
       <div className="hardware-demo-topline">
         <div><span className="hardware-demo-eyebrow">SENTINEL · REAL SERIAL PATH</span><h2>{guardianRevoked ? 'Guardian intervention reported' : unoHit ? 'Integrity fixture detected on the controller path' : pairReady ? 'Both boards are reporting ready' : 'Connect the hardware pair to begin'}</h2></div>
         <span className={'hardware-phase-badge ' + (guardianRevoked ? 'is-danger' : unoHit ? 'is-warning' : pairReady ? 'is-ready' : '')}><i />{phaseLabel[attackDemo.phase]}</span>
