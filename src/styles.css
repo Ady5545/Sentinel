@@ -310,3 +310,50 @@ body{padding-bottom:58px}
 .scenario-panel-footer .screen-link{margin:0}
 @media(max-width:900px){.scenario-mode-row{grid-template-columns:1fr}.scenario-panel-heading{flex-direction:column;gap:10px}.scenario-action-row{align-items:stretch}.scenario-action-row button{flex:1 1 auto}}
 
+
+
+/* Money-flow storytelling: make every virtual withdrawal visible and easy to follow. */
+.money-motion{position:relative;overflow:hidden;isolation:isolate;transition:border-color .22s ease,background .22s ease,box-shadow .22s ease}
+.money-motion-attack{border-color:#c94b51!important;background:linear-gradient(110deg,#2a2025,#1d222a)!important;box-shadow:inset 0 0 0 1px #ff596622,0 0 22px #ff3f501a;animation:money-panel-hit .45s ease-out}
+.money-motion-withdrawal{border-color:#4d9c79!important;box-shadow:inset 0 0 0 1px #57d99b22,0 0 18px #38b98018;animation:money-panel-success .6s ease-out}
+.money-motion-blocked{border-color:#6bb99b!important;background:linear-gradient(110deg,#1e302c,#1b252a)!important;box-shadow:inset 0 0 0 1px #78d6ad24,0 0 24px #36c78a1c;animation:money-panel-block .65s ease-out}
+.money-flyby{position:absolute;right:12px;top:12px;display:flex;align-items:center;gap:6px;z-index:3;pointer-events:none;animation:money-flyby .95s cubic-bezier(.18,.72,.28,1) both}
+.money-flyby span{display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:#c9f5dc;color:#135b3b;font-size:18px;font-weight:850;box-shadow:0 3px 12px #0003}
+.money-flyby b{padding:5px 7px;border-radius:4px;background:#4b292d;color:#ffb6b3;font:700 10px var(--mono);white-space:nowrap}
+.flyby-withdrawal span{background:#baf0d4;color:#135b3b}
+.flyby-withdrawal b{background:#1e4738;color:#9de7c0}
+.money-blocked-stamp{display:flex;align-items:center;justify-content:center;gap:7px;margin-top:11px;padding:8px 10px;border:1px solid #4a9d7b;border-radius:4px;background:#17382e;color:#9ce6c0;font:750 10px var(--mono);letter-spacing:.55px;animation:blocked-stamp-in .3s ease-out both}
+.money-flow-visual{display:grid;grid-template-columns:70px minmax(0,1fr) 78px;align-items:center;gap:8px;margin:13px 0 10px;padding:11px 8px;border:1px solid #2b3b44;border-radius:5px;background:#121b21}
+.money-flow-node{display:grid;justify-items:center;gap:5px;color:#8fa3ae}
+.money-flow-node svg{width:29px;height:29px;padding:7px;border:1px solid #3b505a;border-radius:8px;background:#1d2b33;color:#c7d6dc;box-sizing:content-box}
+.money-flow-node span{font:600 8px var(--mono);letter-spacing:.5px}
+.money-flow-lane{position:relative;display:flex;align-items:center;justify-content:center;min-width:0;height:28px;overflow:hidden;border-top:1px dashed #3d525d;border-bottom:1px dashed #3d525d;color:#6f8792}
+.money-flow-lane>span{position:relative;z-index:2;padding:3px 5px;background:#121b21;font:700 7px var(--mono);letter-spacing:.4px;text-align:center}
+.money-flow-lane>i{position:absolute;left:-8px;top:10px;width:7px;height:7px;border-radius:2px;background:#8da4af;opacity:0}
+.money-flow-lane.lane-attack{border-color:#9c454b;color:#ff9d9f;background:#4a24291a}
+.money-flow-lane.lane-attack>i{background:#ff5c65;opacity:1;animation:rupee-packet .8s linear infinite}
+.money-flow-lane.lane-attack>i:nth-child(2){animation-delay:.25s}
+.money-flow-lane.lane-attack>i:nth-child(3){animation-delay:.5s}
+.money-flow-lane.lane-withdrawal{border-color:#408765;color:#9de7bf;background:#1d4a3517}
+.money-flow-lane.lane-withdrawal>i{background:#76e5aa;opacity:1;animation:rupee-packet .8s linear infinite}
+.money-flow-lane.lane-withdrawal>i:nth-child(2){animation-delay:.25s}
+.money-flow-lane.lane-withdrawal>i:nth-child(3){animation-delay:.5s}
+.money-flow-lane.lane-blocked{border-color:#579c7d;color:#9de7bf;background:#173b2c}
+.money-flow-lane.lane-blocked>i{display:none}
+.money-flow-lane.lane-blocked:after{content:"";position:absolute;left:50%;top:-3px;height:34px;border-left:3px solid #7dd7ab;box-shadow:0 0 10px #4de49a66;animation:gate-slam .28s ease-out both}
+.money-count-in{animation:count-green .6s ease-out}
+.last-money-event{display:grid;grid-template-columns:1fr auto;gap:5px 8px;margin-top:11px;padding:10px;border:1px solid #30434d;border-radius:4px;background:#141f25;animation:event-card-in .25s ease-out}
+.last-money-event>span{align-self:center;color:#8da0aa;font:600 8px var(--mono);letter-spacing:.5px}
+.last-money-event>strong{color:#f1c8a3;font:750 12px var(--mono);text-align:right}
+.last-money-event>small{grid-column:1/-1;color:#8da0aa;font-size:9px}
+@keyframes money-flyby{0%{opacity:0;transform:translate(20px,-9px) scale(.7)}18%{opacity:1;transform:translate(0,0) scale(1.05)}68%{opacity:1;transform:translate(-5px,23px) scale(.96)}100%{opacity:0;transform:translate(-18px,38px) scale(.8)}}
+@keyframes rupee-packet{0%{left:-8px;opacity:0;transform:rotate(0) scale(.65)}12%{opacity:1}88%{opacity:1}100%{left:calc(100% + 8px);opacity:0;transform:rotate(180deg) scale(1)}}
+@keyframes money-panel-hit{0%{transform:translateX(0)}22%{transform:translateX(-2px)}44%{transform:translateX(2px)}66%{transform:translateX(-1px)}100%{transform:translateX(0)}}
+@keyframes money-panel-success{0%{transform:scale(1)}45%{transform:scale(1.012)}100%{transform:scale(1)}}
+@keyframes money-panel-block{0%{box-shadow:inset 0 0 0 1px #78d6ad00}50%{box-shadow:inset 0 0 0 2px #78d6ad66,0 0 30px #36c78a33}100%{box-shadow:inset 0 0 0 1px #78d6ad24,0 0 24px #36c78a1c}}
+@keyframes blocked-stamp-in{0%{opacity:0;transform:scale(.92) translateY(4px)}100%{opacity:1;transform:scale(1) translateY(0)}}
+@keyframes gate-slam{0%{transform:scaleY(.1);opacity:0}100%{transform:scaleY(1);opacity:1}}
+@keyframes count-green{0%{color:#f1f5f7;transform:scale(1)}45%{color:#9de7bf;transform:scale(1.06)}100%{color:#9de7bf;transform:scale(1)}}
+@keyframes event-card-in{0%{opacity:0;transform:translateY(4px)}100%{opacity:1;transform:translateY(0)}}
+@media(max-width:420px){.money-flow-visual{grid-template-columns:56px minmax(0,1fr) 62px;gap:4px;padding:9px 5px}.money-flow-node span{font-size:7px}.money-flow-lane>span{font-size:6px;letter-spacing:0}.money-flyby{right:6px;top:8px}}
+@media(prefers-reduced-motion:reduce){.money-motion-attack,.money-motion-withdrawal,.money-motion-blocked,.money-flyby,.money-blocked-stamp,.money-flow-lane>i,.money-flow-lane.lane-blocked:after,.money-count-in,.last-money-event{animation:none!important;transition:none!important}}
