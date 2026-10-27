@@ -71,3 +71,22 @@ body{padding-bottom:58px}
 .presentation-launch>span:nth-child(2){display:grid;gap:5px}.presentation-launch strong{font-size:10px;font-weight:650;white-space:nowrap}.presentation-launch small{color:#b0cbc0;font-size:8px;white-space:nowrap}.presentation-launch>svg{color:#a6d9c3}
 @media(max-width:900px){.presentation-banner-body{align-items:flex-start;flex-direction:column}.presentation-launch{width:100%;justify-content:flex-start}.presentation-launch>svg{margin-left:auto}}
 @media(max-width:560px){.presentation-banner-top{padding:10px 12px}.presentation-banner-body{padding:17px 12px}.presentation-steps{gap:9px 13px}.presentation-steps span{font-size:8px}.presentation-id{font-size:7px}}
+
+
+/* ATM cabinet ambient status lighting: green = secure idle, red = active threat, blue = Sentinel blocked it. */
+.terminal-layout[class*="ambient-"]{position:relative;isolation:isolate}
+.terminal-layout[class*="ambient-"]::before{content:"";position:absolute;inset:-22px -18px;z-index:-1;pointer-events:none;border-radius:24px;filter:blur(25px);opacity:.78;transition:background .35s ease,opacity .35s ease}
+.terminal-layout.ambient-green::before{background:radial-gradient(ellipse at 30% 28%,#24d87920 0%,transparent 43%),radial-gradient(ellipse at 65% 55%,#00a96b18 0%,transparent 50%)}
+.terminal-layout.ambient-red::before{background:radial-gradient(ellipse at 28% 30%,#ff303c66 0%,transparent 43%),radial-gradient(ellipse at 68% 54%,#e51f352e 0%,transparent 54%);animation:atm-alarm-glow 1.15s ease-in-out infinite alternate}
+.terminal-layout.ambient-blue::before{background:radial-gradient(ellipse at 30% 30%,#168bff55 0%,transparent 44%),radial-gradient(ellipse at 68% 56%,#1765ff35 0%,transparent 54%);animation:atm-guardian-glow 2.2s ease-in-out infinite alternate}
+.terminal-layout.ambient-green .terminal-bezel{box-shadow:0 0 0 1px #2f8d6040,0 0 24px #19c77824,0 12px 36px #00000020}
+.terminal-layout.ambient-red .terminal-bezel{border-color:#a9444c;box-shadow:0 0 0 1px #ff344b55,0 0 13px #ff263d7a,0 0 38px #e51f354c,0 12px 36px #00000035;animation:atm-alarm-border 1.15s ease-in-out infinite alternate}
+.terminal-layout.ambient-blue .terminal-bezel{border-color:#347dc0;box-shadow:0 0 0 1px #218dff5c,0 0 18px #167dff69,0 0 42px #1269ff35,0 12px 36px #00000035}
+.terminal-layout.ambient-red .terminal-indicator i{background:#ff4d58;box-shadow:0 0 5px #ff263d,0 0 12px #ff263d;animation:atm-indicator-blink .7s steps(2,end) infinite}
+.terminal-layout.ambient-blue .terminal-indicator i{background:#55b8ff;box-shadow:0 0 5px #168bff,0 0 12px #168bff}
+.terminal-layout.ambient-green .terminal-indicator i{background:#45e58e;box-shadow:0 0 5px #20d879,0 0 12px #20d879}
+@keyframes atm-alarm-glow{from{opacity:.45}to{opacity:1}}
+@keyframes atm-alarm-border{from{box-shadow:0 0 0 1px #ff344b35,0 0 8px #ff263d45,0 0 22px #e51f3528,0 12px 36px #00000035}to{box-shadow:0 0 0 1px #ff344b75,0 0 17px #ff263da8,0 0 45px #e51f356b,0 12px 36px #00000035}}
+@keyframes atm-guardian-glow{from{opacity:.55}to{opacity:.95}}
+@keyframes atm-indicator-blink{to{opacity:.35}}
+@media(prefers-reduced-motion:reduce){.terminal-layout.ambient-red::before,.terminal-layout.ambient-blue::before,.terminal-layout.ambient-red .terminal-bezel,.terminal-layout.ambient-red .terminal-indicator i{animation:none}}
