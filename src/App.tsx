@@ -490,7 +490,7 @@ function TerminalView({ state, dispatch, onRunSecurityDemo }: { state: AtmState;
         <button className="presentation-launch" onClick={onRunSecurityDemo}><span className="presentation-launch-icon"><ShieldCheck size={19} /></span><span><strong>Run security sequence</strong><small>Open the live result view</small></span><ArrowRight size={17} /></button>
       </div>
     </section>
-    <div className="terminal-layout">
+    <div className={"terminal-layout ambient-" + (state.sentinelStatus === 'AUTHORITY REVOKED' ? 'blue' : state.controllerState === 'COMPROMISED' ? 'red' : 'green')}>
       <section className="terminal-hardware">
         <div className="hardware-label"><span>ATM UNIT / ATM-001</span><span>MODEL PROFILE 01</span></div>
         <div className="terminal-bezel">
