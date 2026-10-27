@@ -96,7 +96,7 @@ export type AtmAction =
 const START_BALANCE = 25000;
 const START_CASSETTE_CASH = 50000;
 const TEST_UNAUTHORIZED_AMOUNT = 2000;
-const ATTACK_AMOUNT_OPTIONS: number[] = [500, 1000, 1500, 2000, 2500, 3000, 4000, 5000];
+const ATTACK_AMOUNT_OPTIONS: number[] = [500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000];
 const VALID_DEMO_PIN = '1234';
 const SIMULATION_PERMIT_TTL_MS = 10_000;
 const timeLabel = () => new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
