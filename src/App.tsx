@@ -98,7 +98,7 @@ export default function App() {
     // Keep the attack clearly simulated but non-deterministic: wait 1–5 seconds
     // and select a fresh virtual amount for each attempt.
     const delayMs = 1000 + Math.floor(Math.random() * 4001);
-    const amounts = [500, 1000, 1500, 2000, 2500, 3000, 4000, 5000];
+    const amounts = [500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000];
     const amount = amounts[Math.floor(Math.random() * amounts.length)];
     const handle = window.setTimeout(() => dispatch({ type: 'AUTO_ATTACK_TICK', amount }), delayMs);
     return () => window.clearTimeout(handle);
