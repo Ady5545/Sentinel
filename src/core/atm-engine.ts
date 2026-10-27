@@ -68,6 +68,8 @@ export interface AtmState {
   lastDecision: Decision;
   findings: string[];
   scenarioApplied: boolean;
+  sequenceActive: boolean;
+  sequenceCompleted: number;
   pendingWithdrawal: PendingWithdrawal | null;
   simulationPermit: SimulationPermit | null;
   events: JournalEvent[];
@@ -88,6 +90,7 @@ export type AtmAction =
   | { type: 'RETURN_TO_MENU' }
   | { type: 'CANCEL_SESSION' }
   | { type: 'RUN_COMPROMISE_SCENARIO' }
+  | { type: 'AUTO_ATTACK_TICK' }
   | { type: 'RESET_SCENARIO' };
 
 const START_BALANCE = 25000;
@@ -110,7 +113,8 @@ export function initialAtmState(mode: SecurityMode = 'protected'): AtmState {
     accountId: 'SIM-1001', accountBalance: START_BALANCE, cassetteCash: START_CASSETTE_CASH,
     dispensedTotal: 0, selectedAmount: 1000, receiptMessage: '', lastTransaction: null, transactions: [],
     controllerState: 'READY', sentinelStatus: 'MONITORING', lastDecision: 'NONE', findings: [],
-    scenarioApplied: false, pendingWithdrawal: null, simulationPermit: null, events: []
+    scenarioApplied: false, sequenceActive: false, sequenceCompleted: 0,
+    pendingWithdrawal: null, simulationPermit: null, events: []
   };
   initial.events = pushEvent(initial, 'info', 'SYSTEM', 'ATM emulator initialized', 'Offline research simulation ready. All accounts, peripherals and cash are virtual.');
   return initial;
@@ -283,7 +287,7 @@ export function atmReducer(state: AtmState, action: AtmAction): AtmState {
       return updateWithEvent(state, 'info', 'ATM', 'Customer session ended', 'Virtual card returned and session state cleared. Any pending request or unused permit was invalidated.',
         { screen: 'welcome', service: null, pinBuffer: '', authenticated: false, failedPinAttempts: 0, receiptMessage: '', pendingWithdrawal: null, simulationPermit: null, lastDecision: 'NONE' });
     case 'RUN_COMPROMISE_SCENARIO': {
-      if (state.scenarioApplied) return state;
+      if (state.scenarioApplied || state.sequenceActive) return state;
       const evidence: ControllerEvidence = {
         expectedProfile: 'UNO-LAB-01', reportedProfile: 'UNO-LAB-01/ALTERED',
         privilegedPathRequested: true, maintenanceWindowOpen: false,
@@ -291,21 +295,45 @@ export function atmReducer(state: AtmState, action: AtmAction): AtmState {
         heartbeatLimitMs: 3000, frameFresh: false, legalStateTransition: false
       };
       const findings = assessControllerEvidence(evidence);
-      let next = updateWithEvent(state, 'warning', 'UNO', 'Controlled compromise fixture injected',
-        'The fixture supplies profile mismatch, out-of-window privileged state, sequence divergence, stale heartbeat/frame and illegal transition. These are simulated inputs.',
-        { controllerState: 'COMPROMISED', scenarioApplied: true, pendingWithdrawal: null, simulationPermit: null });
       if (state.mode === 'baseline') {
-        return updateWithEvent(next, 'critical', 'DISPENSER', 'Baseline accepted unauthorized dispense request',
-          'No independent Sentinel gate is enforced in baseline mode. ₹2,000 of virtual cassette cash was released; the synthetic account ledger was not debited by this controlled fixture.',
-          { cassetteCash: Math.max(0, next.cassetteCash - TEST_UNAUTHORIZED_AMOUNT), dispensedTotal: next.dispensedTotal + TEST_UNAUTHORIZED_AMOUNT, lastDecision: 'NONE', findings: [] });
+        return updateWithEvent(state, 'critical', 'UNO', 'Controlled test fixture deployed',
+          'SOFTWARE SIMULATION ONLY: SENTINEL is OFF. The controller model is marked compromised and a sequence of three timed ₹2,000 virtual withdrawals starts automatically.',
+          { controllerState: 'COMPROMISED', scenarioApplied: true, sequenceActive: true, sequenceCompleted: 0, pendingWithdrawal: null, simulationPermit: null });
       }
-      if (findings.length > 0) {
-        next = updateWithEvent(next, 'critical', 'SENTINEL', 'Controller authority revoked', findings.join(' '),
-          { sentinelStatus: 'AUTHORITY REVOKED', lastDecision: 'REVOKE', findings, screen: 'lockdown', pendingWithdrawal: null, simulationPermit: null });
-        return updateWithEvent(next, 'success', 'DISPENSER', 'Unauthorized dispense blocked',
-          'The authoritative virtual gate denied ₹2,000. Account balance and cassette inventory did not change.');
+      const compromised = updateWithEvent(state, 'critical', 'UNO', 'Controlled test fixture deployed',
+        'SOFTWARE SIMULATION ONLY: the same controller-integrity fixture is evaluated with SENTINEL enabled.',
+        { controllerState: 'COMPROMISED', scenarioApplied: true, sequenceActive: false, sequenceCompleted: 0, pendingWithdrawal: null, simulationPermit: null });
+      const revoked = updateWithEvent(compromised, 'critical', 'SENTINEL', 'Controller authority revoked',
+        findings.join(' ') || 'The protected policy revoked controller authority.',
+        { sentinelStatus: 'AUTHORITY REVOKED', lastDecision: 'REVOKE', findings, screen: 'lockdown', pendingWithdrawal: null, simulationPermit: null });
+      return updateWithEvent(revoked, 'success', 'DISPENSER', 'Automatic virtual withdrawals blocked',
+        'The same test fixture was stopped before any automated withdrawal. Account balance, cassette inventory, and dispensed total remain unchanged.');
+    }
+    case 'AUTO_ATTACK_TICK': {
+      if (state.mode !== 'baseline' || !state.sequenceActive || !state.scenarioApplied ||
+          state.controllerState !== 'COMPROMISED' || state.sentinelStatus === 'AUTHORITY REVOKED') return state;
+      const amount = TEST_UNAUTHORIZED_AMOUNT;
+      const target = 3;
+      if (state.sequenceCompleted >= target) return { ...state, sequenceActive: false };
+      if (amount > state.accountBalance || amount > state.cassetteCash) {
+        return updateWithEvent(state, 'warning', 'DISPENSER', 'Automatic sequence stopped at virtual limit',
+          'The virtual sequence stopped because the remaining synthetic balance or cassette inventory cannot satisfy another withdrawal.',
+          { sequenceActive: false });
       }
-      return updateWithEvent(next, 'success', 'SENTINEL', 'Evidence check passed', 'No configured controller-integrity rule was violated.', { lastDecision: 'PERMIT' });
+      const txn = createTransaction('withdrawal', amount, 'completed');
+      const completed = state.sequenceCompleted + 1;
+      const finished = completed >= target;
+      return updateWithEvent(state, 'critical', 'DISPENSER', 'Automatic virtual withdrawal simulated',
+        'SENTINEL is OFF in this software-only comparison. Virtual withdrawal ' + completed + ' of ' + target + ' released ₹' + amount.toLocaleString('en-IN') + '.',
+        {
+          accountBalance: state.accountBalance - amount,
+          cassetteCash: state.cassetteCash - amount,
+          dispensedTotal: state.dispensedTotal + amount,
+          lastTransaction: txn,
+          transactions: [...state.transactions, txn],
+          sequenceCompleted: completed,
+          sequenceActive: !finished
+        });
     }
     case 'RESET_SCENARIO': {
       const next = initialAtmState(state.mode);
