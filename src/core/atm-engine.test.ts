@@ -187,12 +187,43 @@ describe('virtual dispenser authority boundary', () => {
     expect(final.dispensedTotal).toBe(initial.dispensedTotal);
     expect(final.accountBalance).toBe(initial.accountBalance);
   });
-  it('reproduces the unauthorized virtual dispense in baseline mode', () => {
+  it('runs three automatic virtual withdrawals only in the SENTINEL-off baseline', () => {
     const initial = initialAtmState('baseline');
-    const final = atmReducer(initial, { type: 'RUN_COMPROMISE_SCENARIO' });
+    let final = atmReducer(initial, { type: 'RUN_COMPROMISE_SCENARIO' });
     expect(final.sentinelStatus).toBe('MONITORING');
-    expect(final.cassetteCash).toBe(initial.cassetteCash - 2000);
-    expect(final.dispensedTotal).toBe(2000);
+    expect(final.controllerState).toBe('COMPROMISED');
+    expect(final.sequenceActive).toBe(true);
+    expect(final.sequenceCompleted).toBe(0);
     expect(final.accountBalance).toBe(initial.accountBalance);
+    expect(final.cassetteCash).toBe(initial.cassetteCash);
+    for (let i = 0; i < 3; i++) final = atmReducer(final, { type: 'AUTO_ATTACK_TICK' });
+    expect(final.sequenceActive).toBe(false);
+    expect(final.sequenceCompleted).toBe(3);
+    expect(final.transactions).toHaveLength(3);
+    expect(final.accountBalance).toBe(initial.accountBalance - 6000);
+    expect(final.cassetteCash).toBe(initial.cassetteCash - 6000);
+    expect(final.dispensedTotal).toBe(6000);
+  });
+  it('blocks the same controlled fixture when SENTINEL is enabled', () => {
+    const initial = initialAtmState('protected');
+    const final = atmReducer(initial, { type: 'RUN_COMPROMISE_SCENARIO' });
+    expect(final.sentinelStatus).toBe('AUTHORITY REVOKED');
+    expect(final.sequenceActive).toBe(false);
+    expect(final.sequenceCompleted).toBe(0);
+    expect(final.accountBalance).toBe(initial.accountBalance);
+    expect(final.cassetteCash).toBe(initial.cassetteCash);
+    expect(final.dispensedTotal).toBe(0);
+  });
+  it('resetting into protected mode restores the clean demo state', () => {
+    const attacked = atmReducer(initialAtmState('baseline'), { type: 'RUN_COMPROMISE_SCENARIO' });
+    const reset = atmReducer(attacked, { type: 'SET_MODE', mode: 'protected' });
+    expect(reset.mode).toBe('protected');
+    expect(reset.sequenceActive).toBe(false);
+    expect(reset.sequenceCompleted).toBe(0);
+    expect(reset.controllerState).toBe('READY');
+    expect(reset.sentinelStatus).toBe('MONITORING');
+    expect(reset.accountBalance).toBe(25000);
+    expect(reset.cassetteCash).toBe(50000);
+    expect(reset.scenarioApplied).toBe(false);
   });
 });
