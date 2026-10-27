@@ -483,7 +483,13 @@ export default function App() {
     } : previous);
   };
 
-  return <div className="sentinel-os">
+  const ambientSecurityState = (boards.sentinel.phase === 'REVOKED' || ['guardian-revoked', 'controller-locked'].includes(attackDemo.phase))
+    ? 'blue'
+    : (Boolean(attackDemo.unoEvidence) || ['sending', 'awaiting-uno', 'fixture-injected', 'error'].includes(attackDemo.phase))
+      ? 'red'
+      : 'green';
+
+  return <div className={"sentinel-os security-state-" + ambientSecurityState}>
     <header className="os-menubar"><div className="os-brand"><span className="os-brand-mark"><ShieldCheck size={13} /></span><strong>SENTINEL</strong><span className="os-separator">/</span><span>RESEARCH ENVIRONMENT</span></div><div className="os-menubar-center"><span className="os-live-dot" /> LOCAL WORKSTATION <span className="os-separator">·</span> OFFLINE-FIRST</div><div className="os-menubar-right"><span className="os-runtime">{runtime ? runtime.platform.toUpperCase() + ' · ' + runtime.version : 'DEVELOPMENT SESSION'}</span><span className="os-menubar-clock">{clock()}</span></div></header>
     <div className="desktop-app">
     <aside className="app-rail">
@@ -679,7 +685,7 @@ function ExperimentView({ boards, pairReady, attackDemo, nowMs, onNavigate, onRu
     return board.phase;
   };
   return <>
-    <ScreenHeading number="04" eyebrow="LIVE HARDWARE EXPERIMENT" title="Attack → detect → revoke" description="This lab sends a labelled test fixture to the connected Arduino UNO. Every stage advances only when the app sees corresponding board-reported serial evidence." action={<span className={'decision-pill ' + (guardianRevoked ? 'danger' : pairReady ? 'safe' : '')}>{pairReady ? 'PAIRED HARDWARE READY' : guardianRevoked ? 'REVOCATION LATCHED' : 'PAIR NOT READY'}</span>} />
+    <ScreenHeading number="04" eyebrow="JUDGE DEMO · LIVE HARDWARE EVIDENCE" title="Attack → detect → revoke" description="Start the controlled demo once. SENTINEL advances through the stages only when it receives matching evidence from the physical UNO and ESP32; no UI-only success is assumed." action={<span className={'decision-pill ' + (guardianRevoked ? 'danger' : pairReady ? 'safe' : '')}>{pairReady ? 'PAIRED HARDWARE READY' : guardianRevoked ? 'REVOCATION LATCHED' : 'PAIR NOT READY'}</span>} />
     <section className={'hardware-demo-shell phase-' + attackDemo.phase + (pairReady ? ' pair-ready' : '') + (unoHit ? ' uno-compromised' : '') + (guardianRevoked ? ' guardian-revoked' : '')}>
       <div className="hardware-demo-topline">
         <div><span className="hardware-demo-eyebrow">SENTINEL · REAL SERIAL PATH</span><h2>{guardianRevoked ? 'Guardian intervention reported' : unoHit ? 'Integrity fixture detected on the controller path' : pairReady ? 'Both boards are reporting ready' : 'Connect the hardware pair to begin'}</h2></div>
@@ -717,7 +723,7 @@ function ExperimentView({ boards, pairReady, attackDemo, nowMs, onNavigate, onRu
           <div className={pairReady && researchMode === 'HIL' && researchPhase === 'ACTIVE' ? 'ready-check complete' : 'ready-check'}><i /> <span><strong>Paired session</strong><small>{pairReady && researchMode === 'HIL' ? 'Ready for protected command' : 'Awaiting both fresh readiness reports'}</small></span></div>
         </div>
         <button className="hardware-connect-button" onClick={() => onNavigate('hardware')}><Plug size={16} /> {pairReady ? 'View hardware connection' : 'Connect Arduino + ESP32'} <ArrowRight size={15} /></button>
-        <button className="hardware-attack-button" onClick={onRunAttack} disabled={!canAttack}><ShieldAlert size={18} /><span><strong>{canAttack ? 'Inject controlled attack fixture' : attackPending ? 'Waiting for board evidence…' : 'Attack locked until pair is ready'}</strong><small>{canAttack ? 'Sends FIXTURE_MISMATCH to the physical UNO. This is a labelled test input, not a real firmware hack.' : 'Requires connected boards, fresh readiness, and an active paired HIL session.'}</small></span><ArrowRight size={18} /></button>
+        <button className="hardware-attack-button" onClick={onRunAttack} disabled={!canAttack}><ShieldAlert size={18} /><span><strong>{canAttack ? 'Start judge demo · inject attack fixture' : attackPending ? 'Judge demo running · waiting for board evidence…' : 'Judge demo locked until pair is ready'}</strong><small>{canAttack ? 'Sends FIXTURE_MISMATCH to the physical UNO. This is a labelled test input, not a real firmware hack.' : 'Requires connected boards, fresh readiness, and an active paired HIL session.'}</small></span><ArrowRight size={18} /></button>
       </div>
       <div className="hardware-evidence-timeline">
         <div className="timeline-heading"><div><span className="hardware-demo-eyebrow">OBSERVATION TIMELINE</span><h3>What changed — based on board output</h3></div><span>{attackDemo.phase === 'idle' ? 'NOT STARTED' : attackDemo.phase === 'error' ? 'INCOMPLETE' : attackDemo.phase === 'controller-locked' ? 'BOARD LOCK REPORTED' : 'LIVE OBSERVATION'}</span></div>
